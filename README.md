@@ -8,6 +8,8 @@ Reflex wrapper for the [MUI X DataGrid](https://mui.com/x/react-data-grid/) (v8)
 uv add reflex-mui-datagrid
 ```
 
+Requires Python >= 3.12, Reflex >= 0.8.26, and polars >= 1.38.0.
+
 ## Quick Start
 
 ```python
@@ -33,58 +35,67 @@ def index() -> rx.Component:
         rows=State.rows,
         columns=State.columns,
         page_size_options=[5, 10, 25],
+        show_toolbar=True,
         height="400px",
     )
+
+app = rx.App()
+app.add_page(index, on_load=State.load_data)
 ```
 
 ## Features
 
-- Wraps `@mui/x-data-grid` v8 (Community edition)
-- Automatic polars dtype to DataGrid column type mapping
-- `ColumnDef` model with snake_case Python attrs that auto-convert to camelCase JS props
-- Event handlers for row click, cell click, sorting, filtering, pagination, and selection changes
-- `WrappedDataGrid` that auto-sizes its container (MUI DataGrid requires explicit parent dimensions)
-- Convenience `row_id_field` parameter for custom row identification
+- Wraps `@mui/x-data-grid` v8 (Community edition) with `@mui/material` v7
+- **Polars LazyFrame integration** -- `lazyframe_to_datagrid()` converts any LazyFrame to DataGrid-ready rows and column definitions in one call
+- **Automatic column type detection** -- polars dtypes map to DataGrid types (`number`, `boolean`, `date`, `dateTime`, `string`)
+- **Automatic dropdown filters** -- low-cardinality string columns and `Categorical`/`Enum` dtypes become `singleSelect` columns with dropdown filters
+- **JSON-safe serialization** -- temporal columns become ISO strings, `List` columns become comma-joined strings, `Struct` columns become strings
+- **`ColumnDef` model** with snake_case Python attrs that auto-convert to camelCase JS props
+- **Event handlers** for row click, cell click, sorting, filtering, pagination, and row selection
+- **Virtual scroll mode** -- `virtual_scroll=True` sets page size to 100 (Community max) for smooth scrolling through large datasets
+- **Auto-sized container** -- `WrappedDataGrid` wraps the grid in a `<div>` with configurable `width`/`height`
+- **Row identification** -- `row_id_field` parameter for custom row ID, auto-generated `__row_id__` column when no `id` column exists
 
-## API
+## Polars-bio VCF Example
 
-### `data_grid(...)`
-
-The main callable — creates a `WrappedDataGrid` (auto-sized container). Key props:
-
-| Prop | Type | Description |
-|------|------|-------------|
-| `rows` | `list[dict]` | Row data |
-| `columns` | `list[dict]` | Column definitions (use `ColumnDef.dict()`) |
-| `row_id_field` | `str` | Field to use as row ID (default: `"id"`) |
-| `height` / `width` | `str` | Container dimensions |
-| `checkbox_selection` | `bool` | Show checkboxes |
-| `page_size_options` | `list[int]` | Pagination options |
-| `density` | `str` | `"comfortable"`, `"compact"`, or `"standard"` |
-| `show_toolbar` | `bool` | Show the built-in toolbar |
-| `on_row_click` | `EventHandler` | Row click callback |
-| `on_sort_model_change` | `EventHandler` | Sort change callback |
-| `on_pagination_model_change` | `EventHandler` | Page change callback |
-
-### `ColumnDef(field, ...)`
-
-Column definition (auto camelCase serialization):
+The included example app demonstrates loading genomic variant data from a VCF file using [polars-bio](https://biodatageeks.org/polars-bio/):
 
 ```python
-from reflex_mui_datagrid import ColumnDef
+import polars_bio as pb
+from reflex_mui_datagrid import data_grid, lazyframe_to_datagrid
 
-col = ColumnDef(
-    field="salary",
-    header_name="Annual Salary",
-    type="number",
-    flex=1,
-    sortable=True,
+lf = pb.scan_vcf("variants.vcf")  # returns a polars LazyFrame
+rows, col_defs = lazyframe_to_datagrid(lf)
+
+data_grid(
+    rows=State.rows,
+    columns=State.columns,
+    virtual_scroll=True,       # 100 rows per page, smooth scrolling
+    show_toolbar=True,
+    density="compact",
+    height="540px",
 )
 ```
 
-### `lazyframe_to_datagrid(lf, *, id_field=None, limit=None)`
+## Running the Example
 
-Convert a polars `LazyFrame` to `(rows, column_defs)`. Adds a `__row_id__` column if no `id` column exists.
+The project uses [uv workspaces](https://docs.astral.sh/uv/concepts/projects/workspaces/). You can run the example app directly from the root:
+
+```bash
+# Install all dependencies
+uv sync
+
+# Run the demo from the root
+uv run --directory examples/datagrid_demo reflex run
+```
+
+The demo has two tabs:
+1. **Employee Data** -- inline polars LazyFrame with pagination, sorting, and dropdown filters
+2. **Genomic Variants (VCF)** -- 793 variants loaded via `polars_bio.scan_vcf()` with virtual scrolling
+
+## API Reference
+
+See [docs/api.md](docs/api.md) for the full API reference.
 
 ## License
 

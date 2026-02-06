@@ -180,6 +180,18 @@ class WrappedDataGrid(DataGrid):
     def create(cls, *children: rx.Component, **props: Any) -> rx.Component:
         width = props.pop("width", "100%")
         height = props.pop("height", "400px")
+        virtual_scroll = props.pop("virtual_scroll", False)
+
+        if virtual_scroll:
+            # Hide pagination and set pageSize to 100 (the maximum
+            # allowed by the Community edition).  The DataGrid's built-in
+            # row virtualisation only puts visible rows in the DOM, so
+            # scrolling stays smooth.  For datasets > 100 rows the
+            # footer remains visible to allow page navigation unless
+            # the caller explicitly hides it.
+            props.setdefault("pagination_model", {"page": 0, "pageSize": 100})
+            props.setdefault("page_size_options", [25, 50, 100])
+
         return Div.create(
             super().create(*children, **props),
             width=width,

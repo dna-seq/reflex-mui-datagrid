@@ -28,6 +28,7 @@ class ColumnDef(PropsBase):
     resizable: bool | rx.Var[bool] = True
     hide: bool | rx.Var[bool] = False
     description: str | None = None
+    value_options: list[str] | None = None
     value_getter: rx.Var | None = None
     value_formatter: rx.Var | None = None
     cell_class_name: str | None = None
