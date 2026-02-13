@@ -1,11 +1,33 @@
-"""Reflex wrapper for the MUI X DataGrid (v8) component."""
+"""Reflex wrapper for the MUI X DataGrid (v8) component.
 
+The Community (MIT) edition of MUI X DataGrid forcibly sets
+``pagination: true`` and ``signature: 'DataGrid'``, which caps page
+size at 100 rows and prevents disabling pagination.
+
+This module uses ``UnlimitedDataGrid.js`` – a thin React wrapper that
+monkey-patches two MUI internals at import time:
+
+1. ``throwIfPageSizeExceedsTheLimit`` is replaced with a no-op,
+   removing the 100-row page-size cap.
+2. ``useDataGridProps`` is wrapped so that the ``pagination`` prop
+   passed by the caller is respected instead of being forced to
+   ``true``.  When omitted it still defaults to ``true``.
+
+Row virtualisation (only visible DOM rows are rendered) is built into
+the Community edition and works regardless of page size, so scrolling
+through thousands of rows stays smooth.
+"""
+
+from pathlib import Path
 from typing import Any, Literal
 
 import reflex as rx
 from reflex.components.el import Div
 
 from reflex_mui_datagrid.models import ColumnDef
+
+# Path to the JS wrapper that patches MUI's forced props.
+_JS_WRAPPER = Path(__file__).parent / "UnlimitedDataGrid.js"
 
 
 # ---------------------------------------------------------------------------
@@ -76,15 +98,22 @@ def _on_column_visibility_model_change_spec(model: rx.Var) -> list[rx.Var]:
 class DataGrid(rx.Component):
     """Reflex wrapper for the MUI X DataGrid (Community, v8).
 
+    The 100-row page-size limit of the Community edition is removed via
+    a small JS wrapper (see module docstring).  You can now set any
+    ``pageSize`` or pass ``pagination=False`` to disable pagination
+    entirely and let the user scroll through all rows.
+
     Requires a parent container with explicit dimensions.
     Use ``WrappedDataGrid`` (or the ``data_grid`` namespace callable) for
     a version that automatically wraps itself in a sized ``<div>``.
     """
 
-    library: str = "@mui/x-data-grid@^8.27.0"
-    tag: str = "DataGrid"
+    library: str = str(_JS_WRAPPER)
+    tag: str = "UnlimitedDataGrid"
+    is_default: bool = False
 
     lib_dependencies: list[str] = [
+        "@mui/x-data-grid@^8.27.0",
         "@mui/material@^7.0.0",
         "@emotion/react@^11.14.0",
         "@emotion/styled@^11.14.0",
@@ -100,6 +129,9 @@ class DataGrid(rx.Component):
     row_height: rx.Var[int]
     column_header_height: rx.Var[int]
     show_toolbar: rx.Var[bool]
+    show_description_in_header: rx.Var[bool]
+    autosize_on_mount: rx.Var[bool]
+    autosize_options: rx.Var[dict[str, Any]]
 
     # ---- selection ----
     checkbox_selection: rx.Var[bool]
@@ -107,10 +139,12 @@ class DataGrid(rx.Component):
     disable_row_selection_on_click: rx.Var[bool]
 
     # ---- pagination ----
+    pagination: rx.Var[bool]
     pagination_model: rx.Var[dict[str, int]]
     page_size_options: rx.Var[list[int]]
     auto_page_size: rx.Var[bool]
     hide_footer_pagination: rx.Var[bool]
+    hide_footer: rx.Var[bool]
 
     # ---- sorting ----
     sort_model: rx.Var[list[dict[str, Any]]]
@@ -119,15 +153,19 @@ class DataGrid(rx.Component):
     # ---- filtering ----
     disable_column_filter: rx.Var[bool]
     filter_debounce_ms: rx.Var[int]
+    filter_model: rx.Var[dict[str, Any]]
 
     # ---- column features ----
     column_visibility_model: rx.Var[dict[str, bool]]
+    column_grouping_model: rx.Var[list[dict[str, Any]]]
     disable_column_selector: rx.Var[bool]
     disable_density_selector: rx.Var[bool]
 
+    # ---- slots / customisation ----
+    slot_props: rx.Var[dict[str, Any]]
+
     # ---- row identification ----
-    # get_row_id is a JS callback – handled via create()
-    # (see ``row_id_field`` convenience parameter below)
+    get_row_id: rx.Var[Any]
 
     # ---- event handlers ----
     on_row_click: rx.EventHandler[_on_row_click_spec]
@@ -160,7 +198,7 @@ class DataGrid(rx.Component):
         if row_id_field is not None:
             props["get_row_id"] = rx.Var(
                 f"(row) => row.{row_id_field}"
-            ).to(rx.EventChain)
+            )
         return super().create(*children, **props)
 
 
@@ -174,23 +212,37 @@ class WrappedDataGrid(DataGrid):
     MUI DataGrid requires a parent container with explicit dimensions.
     This variant pops ``width`` and ``height`` from the props and applies
     them to an outer ``<div>``.
+
+    Pagination is **off** by default – all rows are scrollable via
+    MUI's built-in row virtualisation (only visible DOM rows are
+    rendered).  Pass ``pagination=True`` to re-enable pagination.
     """
 
     @classmethod
     def create(cls, *children: rx.Component, **props: Any) -> rx.Component:
         width = props.pop("width", "100%")
         height = props.pop("height", "400px")
-        virtual_scroll = props.pop("virtual_scroll", False)
+        # ``virtual_scroll`` is kept as an alias for backwards compat
+        # but is no longer needed – pagination is off by default.
+        props.pop("virtual_scroll", None)
 
-        if virtual_scroll:
-            # Hide pagination and set pageSize to 100 (the maximum
-            # allowed by the Community edition).  The DataGrid's built-in
-            # row virtualisation only puts visible rows in the DOM, so
-            # scrolling stays smooth.  For datasets > 100 rows the
-            # footer remains visible to allow page navigation unless
-            # the caller explicitly hides it.
-            props.setdefault("pagination_model", {"page": 0, "pageSize": 100})
-            props.setdefault("page_size_options", [25, 50, 100])
+        # Default: no pagination, no footer, autosize columns.
+        props.setdefault("pagination", False)
+        props.setdefault("hide_footer", True)
+        props.setdefault("autosize_on_mount", True)
+        props.setdefault("autosize_options", {
+            "includeHeaders": True,
+            "includeOutliers": True,
+            "expand": True,
+        })
+
+        # Position the filter/preferences panel below the headers so it
+        # does not obscure column titles.
+        props.setdefault("slot_props", {
+            "panel": {
+                "placement": "bottom-end",
+            },
+        })
 
         return Div.create(
             super().create(*children, **props),

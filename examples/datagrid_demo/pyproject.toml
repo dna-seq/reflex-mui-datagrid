@@ -4,9 +4,11 @@ version = "0.1.0"
 description = "Example Reflex app demonstrating reflex-mui-datagrid with polars LazyFrame and VCF data"
 requires-python = ">=3.12"
 dependencies = [
-    "reflex-mui-datagrid",
-    "polars-bio>=0.20.1",
+    "reflex-mui-datagrid[bio]",
 ]
+
+[project.scripts]
+demo = "datagrid_demo.cli:main"
 
 [tool.uv.sources]
 reflex-mui-datagrid = { workspace = true }

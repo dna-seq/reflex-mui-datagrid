@@ -8,16 +8,27 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "polars>=1.38.0",
+    "polars>=1.0",
     "reflex>=0.8.26",
+    "typer>=0.9.0",
 ]
 
+[project.scripts]
+reflex-mui-datagrid = "reflex_mui_datagrid.cli:main"
+biogrid = "reflex_mui_datagrid.cli:main"
+
+[project.optional-dependencies]
+bio = ["polars-bio>=0.22.0"]
+
 [build-system]
-requires = ["uv_build>=0.9.7,<0.10.0"]
+requires = ["uv_build>=0.9.7,<0.11.0"]
 build-backend = "uv_build"
 
 [tool.uv.workspace]
 members = ["examples/*"]
 
+[tool.uv.sources]
+datagrid-demo = { workspace = true }
+
 [dependency-groups]
-dev = ["polars-bio>=0.20.1"]
+dev = ["reflex-mui-datagrid[bio]", "datagrid-demo"]

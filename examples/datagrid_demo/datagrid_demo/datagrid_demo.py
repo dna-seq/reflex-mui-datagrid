@@ -1,8 +1,11 @@
 """Example Reflex app demonstrating the MUI X DataGrid wrapper.
 
 Two tabs:
-  1. Employee data – inline polars LazyFrame with pagination.
-  2. Genomic Variants (VCF) – loaded via polars-bio scan_vcf with virtual scroll.
+  1. Employee data – scrollable grid (no pagination), using the universal
+     ``lazyframe_to_datagrid`` (no polars-bio dependency).
+  2. Genomic Variants (VCF) – loaded via polars-bio ``scan_vcf``, using
+     ``bio_lazyframe_to_datagrid`` which auto-extracts column descriptions
+     from the VCF header.
 """
 
 from pathlib import Path
@@ -12,9 +15,20 @@ import polars as pl
 import polars_bio as pb
 import reflex as rx
 
-from reflex_mui_datagrid import data_grid, lazyframe_to_datagrid
+from reflex_mui_datagrid import (
+    bio_lazyframe_to_datagrid,
+    data_grid,
+    extract_vcf_descriptions,
+    lazyframe_to_datagrid,
+)
 
 VCF_PATH: Path = Path(__file__).parent / "data" / "antku_small.vcf"
+
+# Pre-compute VCF column descriptions at module level so both
+# the data loader and the row-click handler can use them.
+_vcf_lf_for_meta: pl.LazyFrame = pb.scan_vcf(str(VCF_PATH))
+VCF_DESCRIPTIONS: dict[str, str] = extract_vcf_descriptions(_vcf_lf_for_meta)
+del _vcf_lf_for_meta  # don't hold onto the LazyFrame
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +105,7 @@ class AppState(rx.State):
 
     def _load_vcf(self) -> None:
         lf = pb.scan_vcf(str(VCF_PATH))
-        rows, col_defs = lazyframe_to_datagrid(lf)
+        rows, col_defs = bio_lazyframe_to_datagrid(lf)
         self.vcf_rows = rows
         self.vcf_columns = [c.dict() for c in col_defs]
         self.vcf_row_count = len(rows)
@@ -110,18 +124,23 @@ class AppState(rx.State):
             )
 
     def handle_vcf_row_click(self, params: dict[str, Any]) -> None:
-        """Handle VCF variant row click."""
-        row = params.get("row", {})
-        if row:
-            chrom = row.get("chrom", "?")
-            start = row.get("start", "?")
-            ref = row.get("ref", "")
-            alt = row.get("alt", "")
-            gt = row.get("GT", "")
-            filt = row.get("filter", "")
-            self.vcf_selected = (
-                f"chr{chrom}:{start} | {ref} > {alt} | GT: {gt} | Filter: {filt}"
-            )
+        """Handle VCF variant row click – show all fields with descriptions."""
+        row: dict[str, Any] = params.get("row", {})
+        if not row:
+            return
+
+        # Build a multi-line detail string with all fields.
+        lines: list[str] = []
+        for field, value in row.items():
+            # Skip the synthetic row-id column.
+            if field == "__row_id__":
+                continue
+            desc = VCF_DESCRIPTIONS.get(field, "")
+            if desc:
+                lines.append(f"{field}: {value}  ({desc})")
+            else:
+                lines.append(f"{field}: {value}")
+        self.vcf_selected = "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +164,7 @@ def employee_tab() -> rx.Component:
         rx.text(
             "A 20-row employee dataset built from an inline polars LazyFrame. "
             "Columns like Department auto-detect as dropdown filters. "
-            "Uses pagination with configurable page sizes.",
+            "No pagination – all rows are scrollable.",
             margin_bottom="1em",
             color="var(--gray-11)",
         ),
@@ -155,7 +174,6 @@ def employee_tab() -> rx.Component:
                 rows=AppState.emp_rows,
                 columns=AppState.emp_columns,
                 row_id_field="id",
-                page_size_options=[5, 10, 20],
                 checkbox_selection=True,
                 disable_row_selection_on_click=True,
                 show_toolbar=True,
@@ -177,8 +195,12 @@ def vcf_tab() -> rx.Component:
         rx.text(
             "Genomic variant calls loaded from a VCF file via ",
             rx.code("polars_bio.scan_vcf()"),
-            " as a native polars LazyFrame. ",
-            "Uses virtual scrolling (no pagination) for smooth browsing. ",
+            " as a native polars LazyFrame, with column descriptions "
+            "auto-extracted via ",
+            rx.code("bio_lazyframe_to_datagrid()"),
+            ". Hover over a column header to see its description. ",
+            "No pagination – all rows are scrollable (MUI's built-in row "
+            "virtualisation only renders visible DOM rows). ",
             "Low-cardinality columns like Filter and GT get dropdown filters automatically.",
             margin_bottom="1em",
             color="var(--gray-11)",
@@ -198,8 +220,9 @@ def vcf_tab() -> rx.Component:
                     columns=AppState.vcf_columns,
                     row_id_field="__row_id__",
                     show_toolbar=True,
+                    show_description_in_header=True,
                     density="compact",
-                    virtual_scroll=True,
+                    column_header_height=70,
                     on_row_click=AppState.handle_vcf_row_click,
                     height="540px",
                     width="100%",
@@ -207,7 +230,11 @@ def vcf_tab() -> rx.Component:
             ),
         ),
         _status_box(
-            rx.text(AppState.vcf_selected, weight="bold"),
+            rx.text(
+                AppState.vcf_selected,
+                white_space="pre-wrap",
+                size="2",
+            ),
         ),
         padding_top="1em",
     )
@@ -224,7 +251,7 @@ def index() -> rx.Component:
             ),
             rx.tabs.content(employee_tab(), value="employees"),
             rx.tabs.content(vcf_tab(), value="vcf"),
-            default_value="employees",
+            default_value="vcf",
         ),
         padding="2em",
         max_width="1100px",

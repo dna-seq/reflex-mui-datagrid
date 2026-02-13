@@ -84,6 +84,7 @@ This is a `DataGridNamespace` instance that also exposes:
 | Prop | Type | Default | Description |
 |------|------|---------|-------------|
 | `column_visibility_model` | `dict[str, bool]` | -- | `{"salary": False}` hides the salary column. |
+| `column_grouping_model` | `list[dict[str, Any]]` | -- | Define multi-level headers, e.g. `[{"groupId": "Personal", "children": [{"field": "firstName"}]}]`. |
 | `disable_column_selector` | `bool` | -- | Disable the column visibility panel. |
 | `disable_density_selector` | `bool` | -- | Disable the density selector. |
 
@@ -151,7 +152,7 @@ col = ColumnDef(
 
 ## Polars Utilities
 
-### `lazyframe_to_datagrid(lf, *, id_field=None, limit=None, single_select_threshold=20, single_select_ratio=0.5)`
+### `lazyframe_to_datagrid(lf, *, id_field=None, show_id_field=False, limit=None, single_select_threshold=20, single_select_ratio=0.5)`
 
 Convert a polars `LazyFrame` to DataGrid-ready `(rows, column_defs)`.
 
@@ -169,13 +170,14 @@ rows, col_defs = lazyframe_to_datagrid(lf)
 |-----------|------|---------|-------------|
 | `lf` | `pl.LazyFrame` | *required* | The LazyFrame to convert. |
 | `id_field` | `str \| None` | `None` | Column to use as row ID. If `None` and no `"id"` column exists, a `__row_id__` column is auto-generated. |
+| `show_id_field` | `bool` | `False` | Whether to include the row identifier as a visible column in the grid. |
 | `limit` | `int \| None` | `None` | Max rows to collect (uses `.head(limit)`). |
 | `single_select_threshold` | `int` | `20` | String columns with at most this many unique values become `singleSelect`. Set to `0` to disable. |
 | `single_select_ratio` | `float` | `0.5` | Max ratio of unique values to total rows for `singleSelect` detection. |
 
 **Automatic behavior:**
 
-- **Row ID**: If no `id` column and no `id_field` specified, a `__row_id__` column with zero-based index is added.
+- **Row ID**: If no `id` column and no `id_field` specified, a `__row_id__` column with zero-based index is added. The ID column is hidden from the visible grid by default.
 - **Column types**: Polars dtypes are mapped to DataGrid types:
   - `Int*/UInt*/Float*/Decimal` -> `"number"`
   - `Boolean` -> `"boolean"`
@@ -186,6 +188,40 @@ rows, col_defs = lazyframe_to_datagrid(lf)
   - Everything else -> `"string"`
 - **JSON safety**: Temporal columns become ISO strings, `List` columns become comma-joined strings, `Struct` columns become strings.
 - **Header names**: snake_case field names are humanized (`first_name` -> `"First Name"`).
+
+### `show_dataframe(data, **kwargs)`
+
+One-liner to turn a polars DataFrame or LazyFrame into a DataGrid component. Calls `lazyframe_to_datagrid` internally and returns a ready-to-render `data_grid(...)` component.
+
+```python
+import polars as pl
+from reflex_mui_datagrid import show_dataframe
+
+df = pl.read_csv("my_data.csv")
+grid = show_dataframe(df, height="500px", density="compact")
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `data` | `pl.LazyFrame \| pl.DataFrame` | *required* | The polars data to visualize. |
+| `id_field` | `str \| None` | `None` | Column to use as row ID. |
+| `show_id_field` | `bool` | `False` | Whether to show the ID column. |
+| `limit` | `int \| None` | `None` | Max rows to collect. |
+| `single_select_threshold` | `int` | `20` | Max distinct values for auto `singleSelect`. |
+| `single_select_ratio` | `float` | `0.5` | Max unique/row ratio for `singleSelect`. |
+| `column_descriptions` | `dict[str, str] \| None` | `None` | `{column: description}` for tooltips. |
+| `show_toolbar` | `bool` | `True` | Show MUI toolbar. |
+| `show_description_in_header` | `bool` | `False` | Show descriptions as subtitles. |
+| `density` | `str \| None` | `None` | `"comfortable"`, `"compact"`, or `"standard"`. |
+| `height` | `str` | `"600px"` | CSS height of the grid container. |
+| `width` | `str` | `"100%"` | CSS width of the grid container. |
+| `column_header_height` | `int \| None` | `None` | Header height in px. |
+| `checkbox_selection` | `bool` | `False` | Show checkbox column. |
+| `on_row_click` | `rx.EventHandler \| None` | `None` | Row click handler. |
+
+**Best for:** prototyping, static dashboards, exploration. For reactive grids, use `lazyframe_to_datagrid` inside `rx.State`.
 
 ### `polars_dtype_to_grid_type(dtype)`
 
@@ -212,7 +248,9 @@ src/reflex_mui_datagrid/
     __init__.py          # Public exports
     datagrid.py          # DataGrid, WrappedDataGrid, DataGridNamespace
     models.py            # ColumnDef (PropsBase)
-    polars_utils.py      # lazyframe_to_datagrid, polars_dtype_to_grid_type
+    polars_utils.py      # lazyframe_to_datagrid, show_dataframe, polars_dtype_to_grid_type
+    polars_bio_utils.py  # bio_lazyframe_to_datagrid, extract_vcf_descriptions (optional [bio] extra)
+    UnlimitedDataGrid.js # JS patch removing MUI's 100-row page-size cap
 ```
 
 ### Component hierarchy
@@ -231,4 +269,4 @@ Installed automatically by Reflex:
 
 ### MUI DataGrid Community limitations
 
-The Community (MIT) edition has a hard limit of **100 rows per page**. The `virtual_scroll=True` option sets the page size to 100 and provides page size options of `[25, 50, 100]`. For datasets larger than 100 rows, pagination remains available in the footer. True infinite scrolling requires `DataGridPro` (commercial license).
+The Community (MIT) edition normally has a hard limit of **100 rows per page**. This library removes that limit via `UnlimitedDataGrid.js`, which patches the page-size cap and allows `pagination=False`. With pagination off (the default), all rows are scrollable and MUI's built-in row virtualisation keeps performance smooth.
