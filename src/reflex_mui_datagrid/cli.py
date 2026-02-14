@@ -349,9 +349,17 @@ def view(
         try:
             import polars_bio  # noqa: F401
         except ImportError:
+            python_hint = ""
+            if sys.version_info >= (3, 14):
+                python_hint = (
+                    "\nDetected Python 3.14+. The [bio] extra currently requires "
+                    "Python < 3.14 due to the pyarrow dependency chain.\n"
+                    "Try: uv tool install --python 3.13 \"reflex-mui-datagrid[bio]\""
+                )
             typer.echo(
                 f"Error: viewing {fmt.upper()} files requires the [bio] extra.\n"
-                f"Install it with: uv add \"reflex-mui-datagrid[bio]\"",
+                f"Install it with: uv add \"reflex-mui-datagrid[bio]\""
+                f"{python_hint}",
                 err=True,
             )
             raise typer.Exit(code=1)

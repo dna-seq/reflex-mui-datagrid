@@ -679,7 +679,7 @@ dependencies = [
 
 [package.optional-dependencies]
 bio = [
-    { name = "polars-bio" },
+    { name = "polars-bio", marker = "python_full_version < '3.14'" },
 ]
 
 [package.dev-dependencies]
@@ -691,7 +691,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "polars", specifier = ">=1.0" },
-    { name = "polars-bio", marker = "extra == 'bio'", specifier = ">=0.22.0" },
+    { name = "polars-bio", marker = "python_full_version < '3.14' and extra == 'bio'", specifier = ">=0.22.0" },
     { name = "reflex", specifier = ">=0.8.26" },
     { name = "typer", specifier = ">=0.9.0" },
 ]

@@ -18,6 +18,9 @@ For genomic data support (VCF/BAM files), install with the `[bio]` extra:
 uv add "reflex-mui-datagrid[bio]"
 ```
 
+`[bio]` currently supports Python `<3.14` because `polars-bio` depends on
+`pyarrow>=21,<22`, which does not provide reliable Python 3.14 wheel installs.
+
 Requires Python >= 3.12, Reflex >= 0.8.26, and polars >= 1.0.
 
 ## CLI VCF Viewer (No Boilerplate)
@@ -30,6 +33,12 @@ Install as a global `uv` tool (with genomic support):
 
 ```bash
 uv tool install "reflex-mui-datagrid[bio]"
+```
+
+On Python 3.14, install the tool with a Python 3.13 interpreter:
+
+```bash
+uv tool install --python 3.13 "reflex-mui-datagrid[bio]"
 ```
 
 This installs both commands:
@@ -182,6 +191,8 @@ Install with the `[bio]` extra to pull in polars-bio:
 ```bash
 uv add "reflex-mui-datagrid[bio]"
 ```
+
+Note: this extra is currently gated to Python `<3.14`.
 
 This adds [polars-bio](https://pypi.org/project/polars-bio/) >= 0.22.0, which provides `scan_vcf()`, `scan_bam()`, `scan_gff()`, and other genomic file readers -- all returning standard polars LazyFrames.
 
