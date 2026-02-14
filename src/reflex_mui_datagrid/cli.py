@@ -13,7 +13,6 @@ Usage::
 """
 
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -182,73 +181,11 @@ def _build_app_code(
 
 _APP_TEMPLATE = '''"""Auto-generated viewer app for: __FILENAME__"""
 
-from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import reflex as rx
-from reflex.components.el import Div
-from reflex_mui_datagrid.models import ColumnDef
 
-# ---------------------------------------------------------------------------
-# Local DataGrid component pointing to the JS file in this directory.
-# ---------------------------------------------------------------------------
-_LOCAL_JS = Path(__file__).parent / "UnlimitedDataGrid.js"
-
-
-def _on_row_click_spec(event: rx.Var) -> list[rx.Var]:
-    exclude = ["api", "columns", "node", "event"]
-    keys = ", ".join(exclude)
-    return [rx.Var(f"(() => {{let {{{keys}, ...rest}} = {event}; return rest}})()")]
-
-
-class _LocalDataGrid(rx.Component):
-    library: str = str(_LOCAL_JS)
-    tag: str = "UnlimitedDataGrid"
-    is_default: bool = False
-    lib_dependencies: list[str] = [
-        "@mui/x-data-grid@^8.27.0",
-        "@mui/material@^7.0.0",
-        "@emotion/react@^11.14.0",
-        "@emotion/styled@^11.14.0",
-    ]
-    rows: rx.Var[list[dict[str, Any]]]
-    columns: rx.Var[list[dict[str, Any]]]
-    density: rx.Var[Literal["comfortable", "compact", "standard"]]
-    show_toolbar: rx.Var[bool]
-    show_description_in_header: rx.Var[bool]
-    column_header_height: rx.Var[int]
-    pagination: rx.Var[bool]
-    hide_footer: rx.Var[bool]
-    autosize_on_mount: rx.Var[bool]
-    autosize_options: rx.Var[dict[str, Any]]
-    checkbox_selection: rx.Var[bool]
-    get_row_id: rx.Var[Any]
-    slot_props: rx.Var[dict[str, Any]]
-    on_row_click: rx.EventHandler[_on_row_click_spec]
-
-
-class _WrappedLocalDataGrid(_LocalDataGrid):
-    @classmethod
-    def create(cls, *children: rx.Component, **props: Any) -> rx.Component:
-        width = props.pop("width", "100%")
-        height = props.pop("height", "400px")
-        props.setdefault("pagination", False)
-        props.setdefault("hide_footer", True)
-        props.setdefault("autosize_on_mount", True)
-        props.setdefault("autosize_options", {
-            "includeHeaders": True,
-            "includeOutliers": True,
-            "expand": True,
-        })
-        props.setdefault("slot_props", {"panel": {"placement": "bottom-end"}})
-        return Div.create(super().create(*children, **props), width=width, height=height)
-
-
-def _data_grid(**props: Any) -> rx.Component:
-    row_id_field = props.pop("row_id_field", None)
-    if row_id_field is not None:
-        props["get_row_id"] = rx.Var(f"(row) => row.{row_id_field}")
-    return _WrappedLocalDataGrid.create(**props)
+from reflex_mui_datagrid import data_grid
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +227,7 @@ def index() -> rx.Component:
         ),
         rx.cond(
             ViewerState.rows.length() > 0,
-            _data_grid(
+            data_grid(
                 rows=ViewerState.rows,
                 columns=ViewerState.columns,
                 row_id_field="__row_id__",
@@ -377,11 +314,6 @@ def view(
     (app_pkg / "__init__.py").write_text("")
     (app_pkg / f"{app_name}.py").write_text(app_code)
 
-    # Copy UnlimitedDataGrid.js into the temp app package.
-    js_source = Path(__file__).resolve().parent / "UnlimitedDataGrid.js"
-    js_dest = app_pkg / "UnlimitedDataGrid.js"
-    shutil.copy2(js_source, js_dest)
-
     rxconfig_code = f"""import reflex as rx
 config = rx.Config(app_name="{app_name}", frontend_port={port})
 """
@@ -401,22 +333,7 @@ config = rx.Config(app_name="{app_name}", frontend_port={port})
         check=True,
     )
 
-    # Step 2: Vite resolves npm imports by walking up from the JS file's
-    # directory. The JS file lives at <tmp>/viewer_app/UnlimitedDataGrid.js
-    # but Reflex installs node_modules at <tmp>/.web/node_modules.
-    # Fix: add symlinks so resolution works from both viewer_app/ and root.
-    web_node_modules = tmp_dir / ".web" / "node_modules"
-    app_node_modules = app_pkg / "node_modules"
-    if app_node_modules.exists() or app_node_modules.is_symlink():
-        app_node_modules.unlink()
-    app_node_modules.symlink_to(web_node_modules)
-
-    root_node_modules = tmp_dir / "node_modules"
-    if root_node_modules.exists() or root_node_modules.is_symlink():
-        root_node_modules.unlink()
-    root_node_modules.symlink_to(web_node_modules)
-
-    # Step 3: run the app via exec (replaces this process).
+    # Step 2: run the app via exec (replaces this process).
     typer.echo("Starting viewer...")
     os.execvp(sys.executable, [sys.executable, "-m", "reflex", "run"])
 

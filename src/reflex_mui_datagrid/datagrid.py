@@ -1,33 +1,24 @@
 """Reflex wrapper for the MUI X DataGrid (v8) component.
 
-The Community (MIT) edition of MUI X DataGrid forcibly sets
-``pagination: true`` and ``signature: 'DataGrid'``, which caps page
-size at 100 rows and prevents disabling pagination.
+The wrapper code (``UnlimitedDataGrid``) is injected directly into Reflex's
+compiled pages via ``add_imports()`` + ``add_custom_code()``.  This ensures
+that the bare ``@mui/x-data-grid`` import resolves from ``.web/node_modules/``
+even when the package is pip-installed into another project.
 
-This module uses ``UnlimitedDataGrid.js`` – a thin React wrapper that
-monkey-patches two MUI internals at import time:
-
-1. ``throwIfPageSizeExceedsTheLimit`` is replaced with a no-op,
-   removing the 100-row page-size cap.
-2. ``useDataGridProps`` is wrapped so that the ``pagination`` prop
-   passed by the caller is respected instead of being forced to
-   ``true``.  When omitted it still defaults to ``true``.
+The ``enhanceColumnsWithDescriptions`` helper renders column descriptions
+in a two-line header when ``showDescriptionInHeader`` is enabled.
 
 Row virtualisation (only visible DOM rows are rendered) is built into
 the Community edition and works regardless of page size, so scrolling
 through thousands of rows stays smooth.
 """
 
-from pathlib import Path
 from typing import Any, Literal
 
 import reflex as rx
 from reflex.components.el import Div
 
 from reflex_mui_datagrid.models import ColumnDef
-
-# Path to the JS wrapper that patches MUI's forced props.
-_JS_WRAPPER = Path(__file__).parent / "UnlimitedDataGrid.js"
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +83,61 @@ def _on_column_visibility_model_change_spec(model: rx.Var) -> list[rx.Var]:
 
 
 # ---------------------------------------------------------------------------
+# Inline JS wrapper – injected into compiled pages via add_custom_code().
+#
+# This defines the UnlimitedDataGrid component using MuiDataGrid_ (which is
+# imported via add_imports as an alias for the real MUI DataGrid).
+# The wrapper adds the enhanceColumnsWithDescriptions feature.
+#
+# Note: The CJS monkey-patches from UnlimitedDataGrid.js (removing the
+# 100-row cap and forcing pagination) rely on CommonJS require() which is
+# unavailable in Vite's ESM environment, so they were already non-functional
+# when served via Vite.  They are intentionally omitted here.
+# ---------------------------------------------------------------------------
+_INLINE_WRAPPER_JS = """
+function _enhanceColumnsWithDescriptions(columns, showDescriptionInHeader) {
+  if (!showDescriptionInHeader || !Array.isArray(columns)) return columns;
+  return columns.map((col) => {
+    if (!col.description || col.renderHeader) return col;
+    const headerName = col.headerName || col.field;
+    const desc = col.description;
+    return {
+      ...col,
+      renderHeader: () =>
+        React.createElement(
+          "div",
+          { style: { lineHeight: 1.2, overflow: "hidden", width: "100%" } },
+          React.createElement(
+            "div",
+            { style: { fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } },
+            headerName
+          ),
+          React.createElement(
+            "div",
+            { style: { fontSize: "0.7em", color: "#888", fontWeight: 400, whiteSpace: "normal", lineHeight: 1.3, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" } },
+            desc
+          )
+        ),
+    };
+  });
+}
+const UnlimitedDataGrid = React.forwardRef((props, ref) => {
+  const { showDescriptionInHeader, columns, ...rest } = props;
+  const enhancedColumns = _enhanceColumnsWithDescriptions(
+    columns,
+    showDescriptionInHeader
+  );
+  return React.createElement(MuiDataGrid_, {
+    ...rest,
+    columns: enhancedColumns,
+    ref,
+  });
+});
+UnlimitedDataGrid.displayName = "UnlimitedDataGrid";
+"""
+
+
+# ---------------------------------------------------------------------------
 # DataGrid component
 # ---------------------------------------------------------------------------
 
@@ -108,16 +154,36 @@ class DataGrid(rx.Component):
     a version that automatically wraps itself in a sized ``<div>``.
     """
 
-    library: str = str(_JS_WRAPPER)
+    library: str = "@mui/x-data-grid"
     tag: str = "UnlimitedDataGrid"
     is_default: bool = False
 
     lib_dependencies: list[str] = [
-        "@mui/x-data-grid@^8.27.0",
         "@mui/material@^7.0.0",
         "@emotion/react@^11.14.0",
         "@emotion/styled@^11.14.0",
     ]
+
+    @property
+    def import_var(self) -> rx.ImportVar:
+        """Override: install the npm package but do NOT emit an import for the tag.
+
+        ``UnlimitedDataGrid`` does not exist in ``@mui/x-data-grid`` -- it is
+        defined by ``add_custom_code()``.  Returning ``render=False`` tells
+        Reflex to install the package without generating a broken import.
+        """
+        return rx.ImportVar(tag=None, render=False)
+
+    def add_imports(self) -> dict:
+        """Import DataGrid (aliased) and React (for createElement/forwardRef in the wrapper)."""
+        return {
+            "@mui/x-data-grid": [rx.ImportVar(tag="DataGrid", alias="MuiDataGrid_")],
+            "react": [rx.ImportVar(tag="React", is_default=True)],
+        }
+
+    def add_custom_code(self) -> list[str]:
+        """Inject the UnlimitedDataGrid wrapper component into the compiled page."""
+        return [_INLINE_WRAPPER_JS]
 
     # ---- data ----
     rows: rx.Var[list[dict[str, Any]]]
