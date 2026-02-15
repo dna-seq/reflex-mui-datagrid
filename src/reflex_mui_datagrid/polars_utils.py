@@ -185,6 +185,298 @@ def lazyframe_to_datagrid(
     return rows, column_defs
 
 
+def build_column_defs_from_schema(
+    schema: pl.Schema,
+    *,
+    value_options_map: dict[str, list[str]] | None = None,
+    column_descriptions: dict[str, str] | None = None,
+    id_field: str | None = None,
+    show_id_field: bool = False,
+) -> list[ColumnDef]:
+    """Build a list of :class:`ColumnDef` from a polars Schema without collecting data.
+
+    This is the server-side counterpart of the column-building logic in
+    :func:`lazyframe_to_datagrid`.  It works purely from the schema (no
+    ``collect()`` needed), which makes it suitable for very large LazyFrames
+    where you don't want to materialise the full dataset just to infer
+    column definitions.
+
+    Args:
+        schema: A polars ``Schema`` (e.g. ``lf.collect_schema()``).
+        value_options_map: Pre-computed mapping of column names to their
+            allowed values.  Columns present in this mapping are rendered
+            as ``singleSelect`` with a dropdown filter.  For example::
+
+                {"chrom": ["1", "2", ..., "X", "Y"]}
+
+        column_descriptions: Optional ``{column: description}`` mapping
+            for column header tooltips / subtitles.
+        id_field: Name of the column used as the unique row identifier.
+            When *show_id_field* is ``False`` (the default), this column
+            is excluded from the returned column definitions.
+        show_id_field: Whether to include the *id_field* column in the
+            result.
+
+    Returns:
+        A list of :class:`ColumnDef` instances inferred from *schema*.
+    """
+    if value_options_map is None:
+        value_options_map = {}
+
+    column_defs: list[ColumnDef] = []
+    for col_name, dtype in schema.items():
+        # Hide the ID field by default.
+        if not show_id_field and col_name == id_field:
+            continue
+
+        grid_type = polars_dtype_to_grid_type(dtype)
+        value_options: list[str] | None = None
+
+        # Use pre-computed value options if provided.
+        if col_name in value_options_map:
+            value_options = value_options_map[col_name]
+            grid_type = "singleSelect"
+        elif _is_categorical_dtype(dtype):
+            # Categorical / Enum columns are singleSelect even without
+            # pre-computed options (the grid will show a dropdown but the
+            # caller should ideally provide the options via the map).
+            grid_type = "singleSelect"
+
+        description: str | None = None
+        if column_descriptions is not None:
+            description = column_descriptions.get(col_name)
+
+        col_def = ColumnDef(
+            field=col_name,
+            header_name=_humanize_field_name(col_name),
+            type=grid_type,
+            value_options=value_options,
+            description=description,
+        )
+        column_defs.append(col_def)
+
+    return column_defs
+
+
+# ---------------------------------------------------------------------------
+# Server-side filtering
+# ---------------------------------------------------------------------------
+
+def _build_filter_expr(
+    item: dict[str, Any],
+    schema: pl.Schema,
+) -> pl.Expr | None:
+    """Translate a single MUI DataGrid filter item to a Polars expression.
+
+    Args:
+        item: A filter item dict, e.g.
+            ``{"field": "age", "operator": ">", "value": 30}``.
+        schema: The LazyFrame schema, used to determine column types.
+
+    Returns:
+        A polars expression, or ``None`` if the item cannot be translated
+        (e.g. unknown operator or missing field).
+    """
+    field: str | None = item.get("field")
+    operator: str | None = item.get("operator")
+    value: Any = item.get("value")
+
+    if field is None or operator is None:
+        return None
+    if field not in schema:
+        return None
+
+    col = pl.col(field)
+    dtype = schema[field]
+    grid_type = polars_dtype_to_grid_type(dtype)
+
+    # -- operators that don't need a value --
+    if operator == "isEmpty":
+        return col.is_null() | (col.cast(pl.String) == "")
+    if operator == "isNotEmpty":
+        return col.is_not_null() & (col.cast(pl.String) != "")
+
+    # Remaining operators require a value.
+    if value is None:
+        return None
+
+    # -- singleSelect operators --
+    if operator == "is":
+        return col.cast(pl.String) == str(value)
+    if operator == "not":
+        return col.cast(pl.String) != str(value)
+    if operator == "isAnyOf":
+        if not isinstance(value, list):
+            return None
+        return col.cast(pl.String).is_in([str(v) for v in value])
+
+    # -- string operators --
+    if grid_type == "string" or _is_categorical_dtype(dtype):
+        str_col = col.cast(pl.String)
+        str_value = str(value)
+        if operator == "contains":
+            return str_col.str.contains(str_value, literal=True)
+        if operator == "equals":
+            return str_col == str_value
+        if operator == "startsWith":
+            return str_col.str.starts_with(str_value)
+        if operator == "endsWith":
+            return str_col.str.ends_with(str_value)
+        return None
+
+    # -- numeric operators --
+    if grid_type == "number":
+        num_value = _coerce_numeric(value)
+        if num_value is None:
+            return None
+        if operator in ("=", "equals"):
+            return col == num_value
+        if operator in ("!=", "not"):
+            return col != num_value
+        if operator == ">":
+            return col > num_value
+        if operator == ">=":
+            return col >= num_value
+        if operator == "<":
+            return col < num_value
+        if operator == "<=":
+            return col <= num_value
+        return None
+
+    return None
+
+
+def _coerce_numeric(value: Any) -> int | float | None:
+    """Try to coerce *value* to a number."""
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        # Try int first, then float
+        for conv in (int, float):
+            try:  # noqa: SIM105  — intentional minimal try for numeric coercion
+                return conv(value)
+            except ValueError:
+                continue
+    return None
+
+
+def apply_filter_model(
+    lf: pl.LazyFrame,
+    filter_model: dict[str, Any],
+    schema: pl.Schema | None = None,
+) -> pl.LazyFrame:
+    """Apply a MUI DataGrid filter model to a Polars LazyFrame.
+
+    Translates the MUI ``filterModel`` JSON structure into Polars
+    expressions and returns the filtered LazyFrame — **no collect**.
+
+    The filter model has the shape::
+
+        {
+            "items": [
+                {"field": "name", "operator": "contains", "value": "foo"},
+                {"field": "age",  "operator": ">",        "value": 30},
+            ],
+            "logicOperator": "and"   # or "or"
+        }
+
+    Supported MUI operators:
+
+    * **String**: ``contains``, ``equals``, ``startsWith``, ``endsWith``,
+      ``isEmpty``, ``isNotEmpty``, ``isAnyOf``
+    * **Number**: ``=``, ``!=``, ``>``, ``>=``, ``<``, ``<=``,
+      ``isEmpty``, ``isNotEmpty``
+    * **singleSelect**: ``is``, ``not``, ``isAnyOf``
+
+    Args:
+        lf: The polars LazyFrame to filter.
+        filter_model: MUI DataGrid filter model dict.
+        schema: Optional schema override.  If ``None``, the schema is
+            obtained from ``lf.collect_schema()``.
+
+    Returns:
+        The filtered ``pl.LazyFrame``.
+    """
+    items: list[dict[str, Any]] = filter_model.get("items", [])
+    if not items:
+        return lf
+
+    if schema is None:
+        schema = lf.collect_schema()
+
+    logic: str = filter_model.get("logicOperator", "and").lower()
+
+    exprs: list[pl.Expr] = []
+    for item in items:
+        expr = _build_filter_expr(item, schema)
+        if expr is not None:
+            exprs.append(expr)
+
+    if not exprs:
+        return lf
+
+    if logic == "or":
+        combined = exprs[0]
+        for e in exprs[1:]:
+            combined = combined | e
+    else:
+        combined = exprs[0]
+        for e in exprs[1:]:
+            combined = combined & e
+
+    return lf.filter(combined)
+
+
+# ---------------------------------------------------------------------------
+# Server-side sorting
+# ---------------------------------------------------------------------------
+
+def apply_sort_model(
+    lf: pl.LazyFrame,
+    sort_model: list[dict[str, str]],
+) -> pl.LazyFrame:
+    """Apply a MUI DataGrid sort model to a Polars LazyFrame.
+
+    Translates the MUI ``sortModel`` array into a ``lf.sort()`` call and
+    returns the sorted LazyFrame — **no collect**.
+
+    The sort model has the shape::
+
+        [
+            {"field": "chrom", "sort": "asc"},
+            {"field": "pos",   "sort": "desc"},
+        ]
+
+    Args:
+        lf: The polars LazyFrame to sort.
+        sort_model: MUI DataGrid sort model list.
+
+    Returns:
+        The sorted ``pl.LazyFrame``.
+    """
+    if not sort_model:
+        return lf
+
+    by: list[str] = []
+    descending: list[bool] = []
+
+    for entry in sort_model:
+        field = entry.get("field")
+        direction = entry.get("sort", "asc")
+        if field is None:
+            continue
+        by.append(field)
+        descending.append(direction == "desc")
+
+    if not by:
+        return lf
+
+    return lf.sort(by=by, descending=descending)
+
+
 def _dataframe_to_dicts(df: pl.DataFrame) -> list[dict[str, Any]]:
     """Convert a DataFrame to a list of JSON-safe dicts.
 

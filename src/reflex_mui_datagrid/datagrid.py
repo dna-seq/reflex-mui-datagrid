@@ -82,19 +82,101 @@ def _on_column_visibility_model_change_spec(model: rx.Var) -> list[rx.Var]:
     return [model]
 
 
+# -- Virtual-scroll near-end callback payload (scroll metrics)
+def _on_rows_scroll_end_spec(event: rx.Var) -> list[rx.Var]:
+    return [event]
+
+
 # ---------------------------------------------------------------------------
 # Inline JS wrapper – injected into compiled pages via add_custom_code().
 #
 # This defines the UnlimitedDataGrid component using MuiDataGrid_ (which is
 # imported via add_imports as an alias for the real MUI DataGrid).
-# The wrapper adds the enhanceColumnsWithDescriptions feature.
 #
-# Note: The CJS monkey-patches from UnlimitedDataGrid.js (removing the
-# 100-row cap and forcing pagination) rely on CommonJS require() which is
-# unavailable in Vite's ESM environment, so they were already non-functional
-# when served via Vite.  They are intentionally omitted here.
+# ESM-compatible monkey-patching (Vite / Rolldown):
+#
+# The MUI DataGrid Community edition enforces two restrictions:
+#   1. ``pagination`` is forced to ``true`` via ``DATA_GRID_FORCED_PROPS``.
+#   2. ``pageSize > 100`` triggers ``throwIfPageSizeExceedsTheLimit``.
+#
+# Both checks compare against ``GridSignature.DataGrid``, a property on
+# a plain JS object.  Crucially, ``GridSignature`` is exported from the
+# *same* npm entry point (``@mui/x-data-grid``) as ``DataGrid``, so
+# after Vite pre-bundles them into a single file they share the exact
+# same object reference.  Mutating ``GridSignature.DataGrid`` at module
+# load time makes *all* internal comparisons
+# ``signatureProp === GridSignature.DataGrid`` fail, because the forced
+# prop still uses the original string literal ``'DataGrid'``.
+#
+# For ``pagination=false`` (continuous scrolling with a vertical scrollbar):
+# MUI still forces ``pagination=true`` internally, so the wrapper sets
+# ``pageSize`` to the total row count and hides the footer, putting all
+# rows on a single "page".  MUI's built-in row virtualisation then
+# renders only the visible DOM rows, and the virtual scroller shows a
+# vertical scrollbar.
+#
+# A lightweight React Error Boundary (``_DataGridGuard``) provides a
+# graceful fallback: if the patch did not propagate for any reason, the
+# guard catches the ``pageSize > 100`` error and re-renders the grid in
+# safe paginated (``autoPageSize``) mode instead of crashing the page.
 # ---------------------------------------------------------------------------
 _INLINE_WRAPPER_JS = """
+// ---------------------------------------------------------------------------
+// 1. Patch: Bypass MUI DataGrid Community 100-row page-size limit.
+//
+// GridSignature_ is imported from the *same* @mui/x-data-grid entry
+// point as MuiDataGrid_, so Vite pre-bundles them into one file and
+// they share the same object reference.  Mutating the .DataGrid
+// property makes all internal `signatureProp === GridSignature.DataGrid`
+// comparisons evaluate to false, removing the cap.
+// ---------------------------------------------------------------------------
+let _muiPatchActive = false;
+try {
+  if (typeof GridSignature_ !== 'undefined' && GridSignature_ &&
+      GridSignature_.DataGrid === 'DataGrid') {
+    GridSignature_.DataGrid = 'DataGrid_Unlimited';
+    _muiPatchActive = true;
+  }
+} catch (_e) { /* import unavailable — handled by Error Boundary */ }
+
+// ---------------------------------------------------------------------------
+// 2. Error Boundary: graceful degradation when the patch does not take
+//    effect (e.g. future MUI version removes GridSignature export).
+//    Catches the "pageSize > 100" error and re-renders in safe mode.
+// ---------------------------------------------------------------------------
+class _DataGridGuard extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { pageSizeError: false, otherError: null };
+  }
+  static getDerivedStateFromError(error) {
+    if (error && typeof error.message === 'string' &&
+        error.message.indexOf('pageSize') !== -1 &&
+        error.message.indexOf('100') !== -1) {
+      return { pageSizeError: true, otherError: null };
+    }
+    return { pageSizeError: false, otherError: error };
+  }
+  componentDidCatch(error) {
+    if (this.state.pageSizeError) {
+      console.warn(
+        '[reflex-mui-datagrid] GridSignature patch did not propagate. ' +
+        'Falling back to paginated mode (autoPageSize).'
+      );
+    }
+  }
+  render() {
+    if (this.state.otherError) throw this.state.otherError;
+    if (this.state.pageSizeError && typeof this.props.fallback === 'function') {
+      return this.props.fallback();
+    }
+    return this.props.children;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3. Column-description header enhancer
+// ---------------------------------------------------------------------------
 function _enhanceColumnsWithDescriptions(columns, showDescriptionInHeader) {
   if (!showDescriptionInHeader || !Array.isArray(columns)) return columns;
   return columns.map((col) => {
@@ -121,17 +203,214 @@ function _enhanceColumnsWithDescriptions(columns, showDescriptionInHeader) {
     };
   });
 }
-const UnlimitedDataGrid = React.forwardRef((props, ref) => {
-  const { showDescriptionInHeader, columns, ...rest } = props;
-  const enhancedColumns = _enhanceColumnsWithDescriptions(
-    columns,
-    showDescriptionInHeader
+
+// ---------------------------------------------------------------------------
+// 4. Debug logger – opt-in via debugLog={true} prop.
+//    Logs to browser console with [DataGrid] prefix and timing info.
+// ---------------------------------------------------------------------------
+const _dgLog = (() => {
+  let _seq = 0;
+  return (enabled, ...args) => {
+    if (!enabled) return;
+    _seq++;
+    console.log(
+      `%c[DataGrid #${_seq}] %c${new Date().toISOString()}`,
+      "color:#2196f3;font-weight:bold",
+      "color:#999",
+      ...args
+    );
+  };
+})();
+
+// ---------------------------------------------------------------------------
+// 5. Prop builder – shared between the primary and fallback render paths.
+// ---------------------------------------------------------------------------
+// MUI's default header filter button opens a generic filter panel from header
+// context. For always-visible filter icons, we use a custom button that opens
+// the filter panel pre-targeted to the clicked column.
+const _AlwaysVisibleFilterIconButton = (props) => {
+  const { field, onClick } = props;
+  const apiRef = useGridApiContext_();
+  const rootProps = useGridRootProps_();
+
+  const handleClick = React.useCallback((event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    apiRef.current.showFilterPanel(field);
+    if (typeof onClick === "function") {
+      onClick(apiRef.current.getColumnHeaderParams(field), event);
+    }
+  }, [apiRef, field, onClick]);
+
+  const iconButton = React.createElement(
+    rootProps.slots.baseIconButton,
+    {
+      onClick: handleClick,
+      "aria-label": apiRef.current.getLocaleText("columnHeaderFiltersLabel"),
+      size: "small",
+      tabIndex: -1,
+      "aria-haspopup": "menu",
+      ...(rootProps.slotProps?.baseIconButton || {}),
+    },
+    React.createElement(rootProps.slots.columnFilteredIcon, { fontSize: "small" })
   );
-  return React.createElement(MuiDataGrid_, {
-    ...rest,
-    columns: enhancedColumns,
-    ref,
+
+  return React.createElement(
+    rootProps.slots.baseTooltip,
+    {
+      title: apiRef.current.getLocaleText("columnMenuFilter"),
+      enterDelay: 1000,
+      ...(rootProps.slotProps?.baseTooltip || {}),
+    },
+    iconButton
+  );
+};
+
+function _buildGridProps(props, unlimitedMode) {
+  const {
+    showDescriptionInHeader,
+    columns,
+    pagination,
+    onRowsScrollEnd,
+    scrollEndThreshold,
+    debugLog,
+    always_show_filter_icon,
+    alwaysShowFilterIcon,
+    ...rest
+  } = props;
+  const enhancedColumns = _enhanceColumnsWithDescriptions(
+    columns, showDescriptionInHeader
+  );
+  const ep = { ...rest, columns: enhancedColumns };
+  const shouldAlwaysShowFilterIcon =
+    alwaysShowFilterIcon !== undefined
+      ? !!alwaysShowFilterIcon
+      : (always_show_filter_icon !== undefined ? !!always_show_filter_icon : false);
+  if (shouldAlwaysShowFilterIcon) {
+    const existingSlots = ep.slots || {};
+    if (!existingSlots.columnHeaderFilterIconButton) {
+      ep.slots = {
+        ...existingSlots,
+        columnHeaderFilterIconButton: _AlwaysVisibleFilterIconButton,
+      };
+    }
+  }
+
+  if (pagination === false) {
+    if (unlimitedMode) {
+      // Patch active: put all rows on one "page" for continuous scrolling.
+      const totalRows = rest.rows ? rest.rows.length : (rest.rowCount || 0);
+      if (totalRows > 0) {
+        ep.paginationModel = { page: 0, pageSize: totalRows };
+        ep.pageSizeOptions = [totalRows];
+      }
+      if (ep.hideFooter === undefined) ep.hideFooter = true;
+    } else {
+      // Fallback: use autoPageSize (respects the 100-row cap).
+      ep.autoPageSize = true;
+      if (ep.hideFooter === undefined) ep.hideFooter = false;
+    }
+  } else if (pagination !== undefined) {
+    ep.pagination = pagination;
+  }
+
+  return ep;
+}
+
+// ---------------------------------------------------------------------------
+// 6. UnlimitedDataGrid wrapper component
+// ---------------------------------------------------------------------------
+const UnlimitedDataGrid = React.forwardRef((props, ref) => {
+  const { onRowsScrollEnd, scrollEndThreshold, debugLog } = props;
+  const log = !!debugLog;
+  const containerRef = React.useRef(null);
+  const scrollEndLockedRef = React.useRef(false);
+  const renderCountRef = React.useRef(0);
+  const rowsLength = Array.isArray(props.rows) ? props.rows.length : 0;
+
+  renderCountRef.current++;
+  _dgLog(log, "render", {
+    renderCount: renderCountRef.current,
+    rows: rowsLength,
+    pagination: props.pagination,
+    patchActive: _muiPatchActive,
   });
+
+  // Unlock when new rows arrive so another near-end trigger can fire.
+  React.useEffect(() => {
+    scrollEndLockedRef.current = false;
+    _dgLog(log, "rows updated", { count: rowsLength });
+  }, [rowsLength, log]);
+
+  // Attach scroll listener to MUI virtual scroller and call onRowsScrollEnd
+  // once when the user reaches the near-bottom threshold.
+  React.useEffect(() => {
+    if (typeof onRowsScrollEnd !== "function") return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const scroller = container.querySelector(".MuiDataGrid-virtualScroller");
+    if (!scroller) {
+      _dgLog(log, "WARN: .MuiDataGrid-virtualScroller not found");
+      return;
+    }
+    _dgLog(log, "scroll listener attached", {
+      scrollHeight: scroller.scrollHeight,
+      clientHeight: scroller.clientHeight,
+    });
+
+    const threshold =
+      typeof scrollEndThreshold === "number" ? scrollEndThreshold : 160;
+
+    const onScroll = () => {
+      const remaining =
+        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+
+      if (remaining <= threshold) {
+        if (!scrollEndLockedRef.current) {
+          scrollEndLockedRef.current = true;
+          const payload = {
+            scrollTop: scroller.scrollTop,
+            scrollHeight: scroller.scrollHeight,
+            clientHeight: scroller.clientHeight,
+            remaining: remaining,
+          };
+          _dgLog(log, "scroll-end fired", payload);
+          onRowsScrollEnd(payload);
+        }
+      } else if (remaining > threshold * 2) {
+        scrollEndLockedRef.current = false;
+      }
+    };
+
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => scroller.removeEventListener("scroll", onScroll);
+  }, [onRowsScrollEnd, scrollEndThreshold, rowsLength, log]);
+
+  const effectiveProps = _buildGridProps(props, _muiPatchActive);
+  const grid = React.createElement(MuiDataGrid_, { ...effectiveProps, ref });
+
+  // When we set a large pageSize (unlimited mode), wrap with the Error
+  // Boundary so a failed patch doesn't crash the page.
+  if (props.pagination === false && _muiPatchActive) {
+    const fallback = () => {
+      _dgLog(log, "WARN: falling back to paginated mode (patch failed)");
+      const safeProps = _buildGridProps(props, false);
+      return React.createElement(MuiDataGrid_, { ...safeProps, ref });
+    };
+    return React.createElement(
+      "div",
+      { ref: containerRef, style: { width: "100%", height: "100%" } },
+      React.createElement(_DataGridGuard, { fallback: fallback }, grid)
+    );
+  }
+
+  return React.createElement(
+    "div",
+    { ref: containerRef, style: { width: "100%", height: "100%" } },
+    grid
+  );
 });
 UnlimitedDataGrid.displayName = "UnlimitedDataGrid";
 """
@@ -175,9 +454,23 @@ class DataGrid(rx.Component):
         return rx.ImportVar(tag=None, render=False)
 
     def add_imports(self) -> dict:
-        """Import DataGrid (aliased) and React (for createElement/forwardRef in the wrapper)."""
+        """Import DataGrid, GridSignature (for ESM patching), and React.
+
+        ``GridSignature`` is imported from the *same* ``@mui/x-data-grid``
+        entry point as ``DataGrid``.  This is critical: Vite pre-bundles
+        each npm entry point into a single file, so importing from the
+        same specifier guarantees both symbols share the same object
+        reference.  Mutating ``GridSignature.DataGrid`` in
+        ``add_custom_code()`` then propagates to *all* internal MUI
+        signature checks within the bundle.
+        """
         return {
-            "@mui/x-data-grid": [rx.ImportVar(tag="DataGrid", alias="MuiDataGrid_")],
+            "@mui/x-data-grid": [
+                rx.ImportVar(tag="DataGrid", alias="MuiDataGrid_"),
+                rx.ImportVar(tag="GridSignature", alias="GridSignature_"),
+                rx.ImportVar(tag="useGridApiContext", alias="useGridApiContext_"),
+                rx.ImportVar(tag="useGridRootProps", alias="useGridRootProps_"),
+            ],
             "react": [rx.ImportVar(tag="React", is_default=True)],
         }
 
@@ -199,6 +492,9 @@ class DataGrid(rx.Component):
     autosize_on_mount: rx.Var[bool]
     autosize_options: rx.Var[dict[str, Any]]
 
+    # ---- debug ----
+    debug_log: rx.Var[bool]
+
     # ---- selection ----
     checkbox_selection: rx.Var[bool]
     row_selection: rx.Var[bool]
@@ -209,15 +505,24 @@ class DataGrid(rx.Component):
     pagination_model: rx.Var[dict[str, int]]
     page_size_options: rx.Var[list[int]]
     auto_page_size: rx.Var[bool]
+    scroll_end_threshold: rx.Var[int]
     hide_footer_pagination: rx.Var[bool]
     hide_footer: rx.Var[bool]
+
+    # ---- server-side mode ----
+    row_count: rx.Var[int]
+    pagination_mode: rx.Var[Literal["client", "server"]]
+    filter_mode: rx.Var[Literal["client", "server"]]
+    sorting_mode: rx.Var[Literal["client", "server"]]
 
     # ---- sorting ----
     sort_model: rx.Var[list[dict[str, Any]]]
     sorting_order: rx.Var[list[str | None]]
+    disable_column_sorting: rx.Var[bool]
 
     # ---- filtering ----
     disable_column_filter: rx.Var[bool]
+    always_show_filter_icon: rx.Var[bool]
     filter_debounce_ms: rx.Var[int]
     filter_model: rx.Var[dict[str, Any]]
 
@@ -241,6 +546,7 @@ class DataGrid(rx.Component):
     on_pagination_model_change: rx.EventHandler[_on_pagination_model_change_spec]
     on_row_selection_model_change: rx.EventHandler[_on_row_selection_model_change_spec]
     on_column_visibility_model_change: rx.EventHandler[_on_column_visibility_model_change_spec]
+    on_rows_scroll_end: rx.EventHandler[_on_rows_scroll_end_spec]
 
     @classmethod
     def create(
@@ -279,22 +585,26 @@ class WrappedDataGrid(DataGrid):
     This variant pops ``width`` and ``height`` from the props and applies
     them to an outer ``<div>``.
 
-    Pagination is **off** by default – all rows are scrollable via
-    MUI's built-in row virtualisation (only visible DOM rows are
-    rendered).  Pass ``pagination=True`` to re-enable pagination.
+    Dynamic pagination (``auto_page_size=True``) is **on** by default –
+    the grid auto-computes how many rows fit in the container and
+    paginates accordingly.  Pass ``pagination=False`` to disable
+    pagination entirely and scroll through all rows instead (the
+    Community edition's 100-row limit is bypassed via the
+    ``GridSignature`` patch).
     """
 
     @classmethod
     def create(cls, *children: rx.Component, **props: Any) -> rx.Component:
         width = props.pop("width", "100%")
         height = props.pop("height", "400px")
-        # ``virtual_scroll`` is kept as an alias for backwards compat
-        # but is no longer needed – pagination is off by default.
+        # ``virtual_scroll`` is kept as an alias for backwards compat.
         props.pop("virtual_scroll", None)
 
-        # Default: no pagination, no footer, autosize columns.
-        props.setdefault("pagination", False)
-        props.setdefault("hide_footer", True)
+        # Default: dynamic pagination with auto page size.
+        props.setdefault("pagination", True)
+        props.setdefault("auto_page_size", True)
+        props.setdefault("hide_footer", False)
+        props.setdefault("always_show_filter_icon", True)
         props.setdefault("autosize_on_mount", True)
         props.setdefault("autosize_options", {
             "includeHeaders": True,
@@ -304,11 +614,20 @@ class WrappedDataGrid(DataGrid):
 
         # Position the filter/preferences panel below the headers so it
         # does not obscure column titles.
-        props.setdefault("slot_props", {
-            "panel": {
-                "placement": "bottom-end",
+        # Show Filter before Sort in the column menu (3-dots on header hover).
+        default_slots = {
+            "panel": {"placement": "bottom-end"},
+            "columnMenu": {
+                "columnMenuFilterItem": {"displayOrder": 0},
+                "columnMenuSortItem": {"displayOrder": 100},
             },
-        })
+        }
+        if "slot_props" not in props:
+            props["slot_props"] = default_slots
+        else:
+            existing = props["slot_props"]
+            if "columnMenu" not in existing:
+                props["slot_props"] = {**existing, "columnMenu": default_slots["columnMenu"]}
 
         return Div.create(
             super().create(*children, **props),

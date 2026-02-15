@@ -188,6 +188,9 @@ cython_debug/
 #  you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 
+# Large data files (downloaded on demand, not tracked)
+examples/datagrid_demo/datagrid_demo/data/antonkulaga.vcf
+
 # Ruff stuff:
 .ruff_cache/
 

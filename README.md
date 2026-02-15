@@ -18,9 +18,6 @@ For genomic data support (VCF/BAM files), install with the `[bio]` extra:
 uv add "reflex-mui-datagrid[bio]"
 ```
 
-`[bio]` currently supports Python `<3.14` because `polars-bio` depends on
-`pyarrow>=21,<22`, which does not provide reliable Python 3.14 wheel installs.
-
 Requires Python >= 3.12, Reflex >= 0.8.26, and polars >= 1.0.
 
 ## CLI VCF Viewer (No Boilerplate)
@@ -33,12 +30,6 @@ Install as a global `uv` tool (with genomic support):
 
 ```bash
 uv tool install "reflex-mui-datagrid[bio]"
-```
-
-On Python 3.14, install the tool with a Python 3.13 interpreter:
-
-```bash
-uv tool install --python 3.13 "reflex-mui-datagrid[bio]"
 ```
 
 This installs both commands:
@@ -192,9 +183,7 @@ Install with the `[bio]` extra to pull in polars-bio:
 uv add "reflex-mui-datagrid[bio]"
 ```
 
-Note: this extra is currently gated to Python `<3.14`.
-
-This adds [polars-bio](https://pypi.org/project/polars-bio/) >= 0.22.0, which provides `scan_vcf()`, `scan_bam()`, `scan_gff()`, and other genomic file readers -- all returning standard polars LazyFrames.
+This adds [polars-bio](https://pypi.org/project/polars-bio/) >= 0.23.0, which provides `scan_vcf()`, `scan_bam()`, `scan_gff()`, and other genomic file readers -- all returning standard polars LazyFrames.
 
 If you only want quick interactive exploration, the CLI is the simplest option:
 
@@ -256,6 +245,119 @@ app.add_page(index, on_load=State.load_vcf)
 2. **INFO fields** -- descriptions from the file's `##INFO` header lines
 3. **FORMAT fields** -- descriptions from the file's `##FORMAT` header lines
 
+## Server-Side Scroll-Loading (Large Datasets)
+
+For datasets too large to load into the browser at once (millions of rows), the `LazyFrameGridMixin` provides a complete server-side solution with scroll-driven infinite loading, filtering, and sorting -- all backed by a polars LazyFrame that is never fully collected into memory.
+
+### Quick Example
+
+```python
+from pathlib import Path
+from reflex_mui_datagrid import LazyFrameGridMixin, lazyframe_grid, scan_file
+
+class MyState(LazyFrameGridMixin):
+    def load_data(self):
+        lf, descriptions = scan_file(Path("my_genome.vcf"))
+        yield from self.set_lazyframe(lf, descriptions)
+
+def index() -> rx.Component:
+    return rx.box(
+        rx.button("Load", on_click=MyState.load_data, loading=MyState.lf_grid_loading),
+        rx.cond(MyState.lf_grid_loaded, lazyframe_grid(MyState)),
+    )
+```
+
+That's it -- you get server-side filtering, sorting, and infinite scroll-loading with no additional wiring.
+
+### `scan_file` -- Auto-Detect File Format
+
+`scan_file` opens any supported file as a polars LazyFrame and extracts column descriptions where available:
+
+```python
+from reflex_mui_datagrid import scan_file
+
+# VCF -- auto-extracts column descriptions from headers
+lf, descriptions = scan_file(Path("variants.vcf"))
+
+# Parquet -- no descriptions, but LazyFrame is ready
+lf, descriptions = scan_file(Path("data.parquet"))
+
+# Also supports: .csv, .tsv, .json, .ndjson, .ipc, .arrow, .feather
+```
+
+### `LazyFrameGridMixin` -- State Mixin
+
+`LazyFrameGridMixin` extends `rx.State` and provides all the state variables and event handlers needed for server-side browsing. Inherit from it in your state class:
+
+```python
+class MyState(LazyFrameGridMixin):
+    # Your own state vars
+    file_available: bool = False
+
+    def load_data(self):
+        lf, descriptions = scan_file(Path("data.parquet"))
+        yield from self.set_lazyframe(lf, descriptions, chunk_size=500)
+```
+
+**State variables** (all prefixed `lf_grid_` to avoid collisions):
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `lf_grid_rows` | `list[dict]` | Currently loaded rows |
+| `lf_grid_columns` | `list[dict]` | Column definitions |
+| `lf_grid_row_count` | `int` | Total rows matching current filter |
+| `lf_grid_loading` | `bool` | Loading indicator |
+| `lf_grid_loaded` | `bool` | Whether data has been loaded |
+| `lf_grid_stats` | `str` | Last refresh timing info |
+| `lf_grid_selected_info` | `str` | Detail string for clicked row |
+
+**`set_lazyframe` parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `lf` | `pl.LazyFrame` | *required* | The LazyFrame to browse |
+| `descriptions` | `dict[str, str] \| None` | `None` | Column descriptions for tooltips |
+| `chunk_size` | `int` | `200` | Rows per scroll chunk |
+| `value_options_sample_rows` | `int` | `20_000` | Rows to sample for dropdown filter options |
+| `value_options_max_unique` | `int` | `50` | Max unique values for dropdown detection |
+
+### `lazyframe_grid` -- Pre-Wired UI Component
+
+Returns a `data_grid(...)` with all server-side handlers already connected:
+
+```python
+from reflex_mui_datagrid import lazyframe_grid, lazyframe_grid_stats_bar, lazyframe_grid_detail_box
+
+def my_page() -> rx.Component:
+    return rx.fragment(
+        lazyframe_grid_stats_bar(MyState),   # row count + timing bar
+        lazyframe_grid(MyState, height="600px"),
+        lazyframe_grid_detail_box(MyState),  # clicked row details
+    )
+```
+
+**`lazyframe_grid` parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `state_cls` | `type` | *required* | Your state class inheriting `LazyFrameGridMixin` |
+| `height` | `str` | `"600px"` | CSS height |
+| `width` | `str` | `"100%"` | CSS width |
+| `density` | `str` | `"compact"` | Grid density |
+| `column_header_height` | `int` | `70` | Header height in px |
+| `scroll_end_threshold` | `int` | `260` | Pixels from bottom to trigger next chunk |
+| `show_toolbar` | `bool` | `True` | Show MUI toolbar |
+| `show_description_in_header` | `bool` | `True` | Show column descriptions as subtitles |
+| `debug_log` | `bool` | `True` | Browser console debug logging |
+| `on_row_click` | `EventHandler \| None` | `None` | Override default row-click handler |
+
+### How It Works
+
+1. `set_lazyframe` stores the LazyFrame in a module-level cache (never serialised into Reflex state), computes the schema, total row count, and low-cardinality filter options from a bounded sample.
+2. Only the first chunk of rows is collected and sent to the frontend.
+3. As the user scrolls near the bottom, `handle_lf_grid_scroll_end` collects the next chunk and appends it.
+4. Filter and sort changes reset to page 0 and re-query the LazyFrame with Polars expressions -- no full-table collect.
+
 ## Running the Example
 
 The project uses [uv workspaces](https://docs.astral.sh/uv/concepts/projects/workspaces/). The example app is a workspace member with a `demo` entrypoint:
@@ -265,12 +367,13 @@ uv sync
 uv run demo
 ```
 
-The demo has two tabs:
+The demo has three tabs:
 
 | Tab | Description |
 |-----|-------------|
 | **Employee Data** | 20-row inline polars LazyFrame with sorting, dropdown filters, checkbox selection |
 | **Genomic Variants (VCF)** | 793 variants loaded via `polars_bio.scan_vcf()`, column descriptions from VCF headers |
+| **Full Genome (Server-Side)** | ~4.5M variants with server-side scroll-loading, filtering, and sorting via `LazyFrameGridMixin` |
 
 ![Employee Data Grid](docs/screenshot_employee_data.jpg)
 

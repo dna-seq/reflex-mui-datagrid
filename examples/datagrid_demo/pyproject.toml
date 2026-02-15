@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Example Reflex app demonstrating reflex-mui-datagrid with polars LazyFrame and VCF data"
 requires-python = ">=3.12"
 dependencies = [
+    "huggingface-hub>=1.4.1",
     "reflex-mui-datagrid[bio]",
 ]
 

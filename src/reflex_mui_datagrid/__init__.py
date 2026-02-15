@@ -11,8 +11,22 @@ VCF/BAM column descriptions from file headers)::
 """
 
 from reflex_mui_datagrid.datagrid import DataGrid, DataGridNamespace, WrappedDataGrid, data_grid
+from reflex_mui_datagrid.lazyframe_grid import (
+    LazyFrameGridMixin,
+    lazyframe_grid,
+    lazyframe_grid_detail_box,
+    lazyframe_grid_stats_bar,
+    scan_file,
+)
 from reflex_mui_datagrid.models import ColumnDef
-from reflex_mui_datagrid.polars_utils import lazyframe_to_datagrid, polars_dtype_to_grid_type, show_dataframe
+from reflex_mui_datagrid.polars_utils import (
+    apply_filter_model,
+    apply_sort_model,
+    build_column_defs_from_schema,
+    lazyframe_to_datagrid,
+    polars_dtype_to_grid_type,
+    show_dataframe,
+)
 
 # Optional polars-bio integration – available when installed with [bio] extra.
 try:

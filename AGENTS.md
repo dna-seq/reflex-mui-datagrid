@@ -1,6 +1,29 @@
 # Agent Guidelines
 
-This project is uv based, it is a reflect wrapper for mui x-data-grid UI component
+This project is uv based, it is a reflex wrapper for mui x-data-grid UI component
+
+## Reflex-Specific Patterns (CRITICAL)
+
+- **State var mixin classes MUST extend `rx.State`**: Reflex's metaclass only wraps class-level annotated attributes into reactive `rx.Var` objects for classes that inherit from `rx.State`. If you create a mixin with state vars as a plain Python class, those vars will remain raw Python defaults (e.g. `int`, `str`, `list`) when accessed on the subclass, and calls like `.to(str)` or reactive comparisons (`!= ""`) will fail at component build time. **Always** make state mixins inherit from `rx.State`:
+  ```python
+  # CORRECT — vars become reactive rx.Var objects
+  class MyMixin(rx.State):
+      my_count: int = 0
+
+  class AppState(MyMixin):
+      ...
+  # AppState.my_count is an rx.Var, .to(str) works
+
+  # WRONG — vars stay as plain Python types
+  class MyMixin:
+      my_count: int = 0
+
+  class AppState(MyMixin, rx.State):
+      ...
+  # AppState.my_count is just int(0), .to(str) crashes
+  ```
+
+- **`pagination=False` for scrollable grids**: The `WrappedDataGrid` defaults to `pagination=True` and `auto_page_size=True`. You MUST explicitly pass `pagination=False` and `hide_footer=True` to get a continuously scrollable grid. Without this, rows are silently paginated and only the first page is visible.
 
 ## Coding Standards
 
