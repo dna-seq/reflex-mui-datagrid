@@ -2,6 +2,11 @@
 
 Reflex wrapper for the [MUI X DataGrid](https://mui.com/x/react-data-grid/) (v8) React component, with built-in [polars](https://pola.rs/) LazyFrame support and optional genomic data visualization via [polars-bio](https://biodatageeks.org/polars-bio/).
 
+[![PyPI](https://img.shields.io/pypi/v/reflex-mui-datagrid?logo=pypi&logoColor=white)](https://pypi.org/project/reflex-mui-datagrid/)
+[![Python](https://img.shields.io/pypi/pyversions/reflex-mui-datagrid?logo=python&logoColor=white)](https://pypi.org/project/reflex-mui-datagrid/)
+[![Downloads](https://img.shields.io/pypi/dm/reflex-mui-datagrid?logo=pypi&logoColor=white)](https://pypi.org/project/reflex-mui-datagrid/)
+[![GitHub](https://img.shields.io/badge/GitHub-dna--seq%2Freflex--mui--datagrid-181717?logo=github)](https://github.com/dna-seq/reflex-mui-datagrid)
+
 ![Genomic Variants DataGrid](docs/screenshot_genomic_variants.jpg)
 
 ## Installation
