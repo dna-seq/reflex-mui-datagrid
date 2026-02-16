@@ -223,7 +223,105 @@ const _dgLog = (() => {
 })();
 
 // ---------------------------------------------------------------------------
-// 5. Prop builder – shared between the primary and fallback render paths.
+// 5. Custom filter panel with Apply button for server-side filtering.
+//
+// When filterMode="server", every keystroke in the filter value input
+// triggers onFilterModelChange, which runs an expensive server query.
+// This wrapper renders the standard GridFilterPanel and adds Apply/Reset
+// buttons below it.  It intercepts onFilterModelChange at the grid level:
+// changes are captured locally and only forwarded to the Python backend
+// when the user clicks Apply (or presses Enter).
+// ---------------------------------------------------------------------------
+const _FilterPanelWithApply = React.forwardRef((props, ref) => {
+  const apiRef = useGridApiContext_();
+
+  // Apply: send the current grid filter model to the server.
+  const handleApply = React.useCallback(() => {
+    const currentModel = apiRef.current.state.filter.filterModel;
+    // Dispatch a custom event that the UnlimitedDataGrid wrapper listens for.
+    const event = new CustomEvent("_applyFilter", { detail: currentModel, bubbles: true });
+    const el = apiRef.current.rootElementRef?.current;
+    if (el) el.dispatchEvent(event);
+  }, [apiRef]);
+
+  // Reset: clear all filters and notify the server.
+  const handleReset = React.useCallback(() => {
+    const emptyModel = { items: [] };
+    apiRef.current.setFilterModel(emptyModel);
+    const event = new CustomEvent("_applyFilter", { detail: emptyModel, bubbles: true });
+    const el = apiRef.current.rootElementRef?.current;
+    if (el) el.dispatchEvent(event);
+  }, [apiRef]);
+
+  // Apply on Enter key press anywhere in the panel.
+  const handleKeyDown = React.useCallback((event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      handleApply();
+    }
+  }, [handleApply]);
+
+  return React.createElement(
+    "div",
+    {
+      onKeyDown: handleKeyDown,
+      style: { display: "flex", flexDirection: "column" },
+    },
+    React.createElement(GridFilterPanel_, { ...props, ref: ref }),
+    React.createElement(
+      "div",
+      {
+        style: {
+          display: "flex",
+          justifyContent: "flex-end",
+          gap: "8px",
+          padding: "8px 16px 12px",
+          borderTop: "1px solid rgba(0,0,0,0.12)",
+        },
+      },
+      React.createElement(
+        "button",
+        {
+          onClick: handleReset,
+          style: {
+            padding: "6px 16px",
+            border: "1px solid rgba(0,0,0,0.23)",
+            borderRadius: "4px",
+            background: "transparent",
+            cursor: "pointer",
+            fontSize: "0.8125rem",
+            fontFamily: "inherit",
+            color: "inherit",
+          },
+        },
+        "Reset"
+      ),
+      React.createElement(
+        "button",
+        {
+          onClick: handleApply,
+          style: {
+            padding: "6px 16px",
+            border: "none",
+            borderRadius: "4px",
+            background: "#1976d2",
+            color: "#fff",
+            cursor: "pointer",
+            fontSize: "0.8125rem",
+            fontFamily: "inherit",
+            fontWeight: 500,
+          },
+        },
+        "Apply"
+      )
+    )
+  );
+});
+_FilterPanelWithApply.displayName = "_FilterPanelWithApply";
+
+// ---------------------------------------------------------------------------
+// 6. Prop builder – shared between the primary and fallback render paths.
 // ---------------------------------------------------------------------------
 // MUI's default header filter button opens a generic filter panel from header
 // context. For always-visible filter icons, we use a custom button that opens
@@ -400,6 +498,18 @@ function _buildGridProps(props, unlimitedMode) {
     }
   }
 
+  // When server-side filtering is active, use the custom filter panel
+  // with Apply/Reset buttons so every keystroke doesn't trigger a query.
+  if (ep.filterMode === "server") {
+    const existingSlots = ep.slots || {};
+    if (!existingSlots.filterPanel) {
+      ep.slots = {
+        ...existingSlots,
+        filterPanel: _FilterPanelWithApply,
+      };
+    }
+  }
+
   if (pagination === false) {
     if (unlimitedMode) {
       // Patch active: put all rows on one "page" for continuous scrolling.
@@ -422,7 +532,7 @@ function _buildGridProps(props, unlimitedMode) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. UnlimitedDataGrid wrapper component
+// 7. UnlimitedDataGrid wrapper component
 // ---------------------------------------------------------------------------
 const UnlimitedDataGrid = React.forwardRef((props, ref) => {
   const { onRowsScrollEnd, scrollEndThreshold, debugLog } = props;
@@ -492,7 +602,61 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     return () => scroller.removeEventListener("scroll", onScroll);
   }, [onRowsScrollEnd, scrollEndThreshold, rowsLength, log]);
 
+  // When filterMode="server" and the custom filter panel is active,
+  // listen for the _applyFilter custom event dispatched by the Apply
+  // button instead of letting MUI fire onFilterModelChange on every
+  // keystroke.
+  const realOnFilterModelChange = props.onFilterModelChange;
+  const isServerFilter = props.filterMode === "server";
+
+  React.useEffect(() => {
+    if (!isServerFilter || typeof realOnFilterModelChange !== "function") return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handler = (e) => {
+      _dgLog(log, "apply-filter event", e.detail);
+      realOnFilterModelChange(e.detail);
+    };
+    container.addEventListener("_applyFilter", handler);
+    return () => container.removeEventListener("_applyFilter", handler);
+  }, [isServerFilter, realOnFilterModelChange, log]);
+
   const effectiveProps = _buildGridProps(props, _muiPatchActive);
+
+  // In server filter mode:
+  // 1. Remove onFilterModelChange so MUI doesn't call it on every keystroke.
+  //    The Apply button dispatches a custom event that we handle above.
+  // 2. Replace the controlled filterModel with a local state that only
+  //    syncs from the Python prop when it genuinely changes (e.g. after
+  //    Apply, Clear All, or preset upload).  This prevents MUI from
+  //    resetting the user's in-progress edits on unrelated re-renders.
+  const pythonFilterModel = isServerFilter ? props.filterModel : undefined;
+  const [localFilterModel, setLocalFilterModel] = React.useState(
+    pythonFilterModel || { items: [] }
+  );
+
+  // Track the previous Python filter model to detect genuine changes.
+  const prevPythonFilterRef = React.useRef(JSON.stringify(pythonFilterModel));
+  React.useEffect(() => {
+    if (!isServerFilter) return;
+    const serialized = JSON.stringify(pythonFilterModel);
+    if (serialized !== prevPythonFilterRef.current) {
+      prevPythonFilterRef.current = serialized;
+      setLocalFilterModel(pythonFilterModel || { items: [] });
+    }
+  }, [isServerFilter, pythonFilterModel]);
+
+  if (isServerFilter) {
+    delete effectiveProps.onFilterModelChange;
+    // Use the local filter model instead of the Python-controlled one.
+    effectiveProps.filterModel = localFilterModel;
+    // Let MUI update the local state when the user edits in the panel.
+    effectiveProps.onFilterModelChange = (model) => {
+      setLocalFilterModel(model);
+    };
+  }
+
   const grid = React.createElement(MuiDataGrid_, { ...effectiveProps, ref });
 
   // When we set a large pageSize (unlimited mode), wrap with the Error
@@ -574,6 +738,7 @@ class DataGrid(rx.Component):
                 rx.ImportVar(tag="GridSignature", alias="GridSignature_"),
                 rx.ImportVar(tag="useGridApiContext", alias="useGridApiContext_"),
                 rx.ImportVar(tag="useGridRootProps", alias="useGridRootProps_"),
+                rx.ImportVar(tag="GridFilterPanel", alias="GridFilterPanel_"),
             ],
             "react": [rx.ImportVar(tag="React", is_default=True)],
         }

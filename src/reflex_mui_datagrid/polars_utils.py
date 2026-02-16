@@ -291,6 +291,28 @@ def build_column_defs_from_schema(
 # Server-side filtering
 # ---------------------------------------------------------------------------
 
+def _resolve_field_name(field: str, schema: pl.Schema) -> str | None:
+    """Resolve a field name against the schema, tolerating case mismatches.
+
+    MUI DataGrid (or the Reflex serialisation layer) may alter the case
+    of column names (e.g. ``"DP"`` → ``"dp"``).  This helper first tries
+    an exact match, then falls back to a case-insensitive lookup.
+
+    Args:
+        field: The field name from the filter/sort model.
+        schema: The LazyFrame schema with the canonical column names.
+
+    Returns:
+        The canonical column name from the schema, or ``None`` if no
+        match is found (even case-insensitively).
+    """
+    if field in schema:
+        return field
+    # Case-insensitive fallback: build a lowercase → canonical map.
+    lower_map: dict[str, str] = {name.lower(): name for name in schema.names()}
+    return lower_map.get(field.lower())
+
+
 def _build_filter_expr(
     item: dict[str, Any],
     schema: pl.Schema,
@@ -306,13 +328,14 @@ def _build_filter_expr(
         A polars expression, or ``None`` if the item cannot be translated
         (e.g. unknown operator or missing field).
     """
-    field: str | None = item.get("field")
+    raw_field: str | None = item.get("field")
     operator: str | None = item.get("operator")
     value: Any = item.get("value")
 
-    if field is None or operator is None:
+    if raw_field is None or operator is None:
         return None
-    if field not in schema:
+    field = _resolve_field_name(raw_field, schema)
+    if field is None:
         return None
 
     col = pl.col(field)
@@ -328,6 +351,21 @@ def _build_filter_expr(
 
     # Remaining operators require a value.
     if value is None:
+        return None
+
+    # -- boolean operators --
+    # MUI DataGrid sends boolean filters with operator "is" and value
+    # as a string "true"/"false" or a Python bool.  Compare directly
+    # against the native boolean column to avoid case mismatches
+    # (Python str(False)="False" vs Polars cast "false").
+    if grid_type == "boolean":
+        bool_value = _coerce_boolean(value)
+        if bool_value is None:
+            return None
+        if operator == "is":
+            return col == bool_value
+        if operator == "not":
+            return col != bool_value
         return None
 
     # -- singleSelect operators --
@@ -389,6 +427,25 @@ def _coerce_numeric(value: Any) -> int | float | None:
                 return conv(value)
             except ValueError:
                 continue
+    return None
+
+
+def _coerce_boolean(value: Any) -> bool | None:
+    """Try to coerce *value* to a Python bool.
+
+    MUI DataGrid sends boolean filter values as the strings ``"true"``
+    or ``"false"``, or occasionally as native JSON booleans (which
+    arrive as Python ``bool``).  Returns ``None`` for empty / unparseable
+    values so the caller can skip the filter item.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low == "true":
+            return True
+        if low == "false":
+            return False
     return None
 
 
@@ -466,11 +523,15 @@ def apply_filter_model(
 def apply_sort_model(
     lf: pl.LazyFrame,
     sort_model: list[dict[str, str]],
+    schema: pl.Schema | None = None,
 ) -> pl.LazyFrame:
     """Apply a MUI DataGrid sort model to a Polars LazyFrame.
 
     Translates the MUI ``sortModel`` array into a ``lf.sort()`` call and
     returns the sorted LazyFrame — **no collect**.
+
+    Field names are resolved case-insensitively against the schema to
+    handle any case mismatches from the frontend serialisation layer.
 
     The sort model has the shape::
 
@@ -482,6 +543,8 @@ def apply_sort_model(
     Args:
         lf: The polars LazyFrame to sort.
         sort_model: MUI DataGrid sort model list.
+        schema: Optional schema override.  If ``None``, the schema is
+            obtained from ``lf.collect_schema()``.
 
     Returns:
         The sorted ``pl.LazyFrame``.
@@ -489,12 +552,18 @@ def apply_sort_model(
     if not sort_model:
         return lf
 
+    if schema is None:
+        schema = lf.collect_schema()
+
     by: list[str] = []
     descending: list[bool] = []
 
     for entry in sort_model:
-        field = entry.get("field")
+        raw_field = entry.get("field")
         direction = entry.get("sort", "asc")
+        if raw_field is None:
+            continue
+        field = _resolve_field_name(raw_field, schema)
         if field is None:
             continue
         by.append(field)
@@ -515,13 +584,14 @@ def _filter_item_to_code(
     schema: pl.Schema,
 ) -> str | None:
     """Translate a single MUI filter item to a Polars code snippet string."""
-    field: str | None = item.get("field")
+    raw_field: str | None = item.get("field")
     operator: str | None = item.get("operator")
     value: Any = item.get("value")
 
-    if field is None or operator is None:
+    if raw_field is None or operator is None:
         return None
-    if field not in schema:
+    field = _resolve_field_name(raw_field, schema)
+    if field is None:
         return None
 
     col = f'pl.col("{field}")'
@@ -536,6 +606,18 @@ def _filter_item_to_code(
         return f'({col}.is_not_null() & ({str_col} != ""))'
 
     if value is None:
+        return None
+
+    # Boolean operators — compare directly against native bool column.
+    if grid_type == "boolean":
+        bool_value = _coerce_boolean(value)
+        if bool_value is None:
+            return None
+        py_bool = "True" if bool_value else "False"
+        if operator == "is":
+            return f"{col} == {py_bool}"
+        if operator == "not":
+            return f"{col} != {py_bool}"
         return None
 
     # singleSelect operators
@@ -629,8 +711,11 @@ def generate_polars_code(
         by_fields: list[str] = []
         descending_flags: list[bool] = []
         for entry in sort_model:
-            field = entry.get("field")
+            raw_field = entry.get("field")
             direction = entry.get("sort", "asc")
+            if raw_field is None:
+                continue
+            field = _resolve_field_name(raw_field, schema) if schema is not None else raw_field
             if field is None:
                 continue
             by_fields.append(field)
@@ -708,8 +793,11 @@ def generate_sql_where(
     if sort_model:
         order_parts: list[str] = []
         for entry in sort_model:
-            field = entry.get("field")
+            raw_field = entry.get("field")
             direction = entry.get("sort", "asc").upper()
+            if raw_field is None:
+                continue
+            field = _resolve_field_name(raw_field, schema) if schema is not None else raw_field
             if field is None:
                 continue
             order_parts.append(f'"{field}" {direction}')
@@ -729,13 +817,14 @@ def _filter_item_to_sql(
     schema: pl.Schema,
 ) -> str | None:
     """Translate a single MUI filter item to a SQL condition string."""
-    field: str | None = item.get("field")
+    raw_field: str | None = item.get("field")
     operator: str | None = item.get("operator")
     value: Any = item.get("value")
 
-    if field is None or operator is None:
+    if raw_field is None or operator is None:
         return None
-    if field not in schema:
+    field = _resolve_field_name(raw_field, schema)
+    if field is None:
         return None
 
     col = f'"{field}"'
@@ -749,6 +838,18 @@ def _filter_item_to_sql(
         return f"({col} IS NOT NULL AND CAST({col} AS TEXT) != '')"
 
     if value is None:
+        return None
+
+    # Boolean operators — compare directly against native BOOLEAN column.
+    if grid_type == "boolean":
+        bool_value = _coerce_boolean(value)
+        if bool_value is None:
+            return None
+        sql_bool = "TRUE" if bool_value else "FALSE"
+        if operator == "is":
+            return f"{col} = {sql_bool}"
+        if operator == "not":
+            return f"{col} != {sql_bool}"
         return None
 
     # singleSelect operators

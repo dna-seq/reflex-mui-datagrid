@@ -36,6 +36,7 @@ import reflex as rx
 from reflex_mui_datagrid.datagrid import data_grid
 from reflex_mui_datagrid.polars_utils import (
     _dataframe_to_dicts,
+    _resolve_field_name,
     apply_filter_model,
     apply_sort_model,
     build_column_defs_from_schema,
@@ -662,7 +663,11 @@ class LazyFrameGridMixin(rx.State):
         columns_updated = False
 
         for item in items:
-            field = item.get("field")
+            raw_field = item.get("field")
+            if not raw_field:
+                continue
+            # Resolve case-insensitively against the schema.
+            field = _resolve_field_name(raw_field, cache.schema) if cache.schema else raw_field
             if not field or field in cache._value_options_cache:
                 continue  # already computed or not a valid field
 
@@ -722,7 +727,7 @@ class LazyFrameGridMixin(rx.State):
             if self._lf_grid_filter and self._lf_grid_filter.get("items"):
                 lf = apply_filter_model(lf, self._lf_grid_filter, schema)
             if self._lf_grid_sort:
-                lf = apply_sort_model(lf, self._lf_grid_sort)
+                lf = apply_sort_model(lf, self._lf_grid_sort, schema)
             self.lf_grid_query_plan = lf.explain()  # type: ignore[assignment]
         else:
             self.lf_grid_query_plan = ""  # type: ignore[assignment]
@@ -768,7 +773,7 @@ class LazyFrameGridMixin(rx.State):
 
         # Apply sort.
         if self._lf_grid_sort:
-            lf = apply_sort_model(lf, self._lf_grid_sort)
+            lf = apply_sort_model(lf, self._lf_grid_sort, cache.schema)
 
         # Slice to current page -- only this slice is collected.
         page = self.lf_grid_pagination_model.get("page", 0)
@@ -1307,7 +1312,17 @@ def merge_filter_model(
             has_value = True
 
         if has_value:
+            # Item has a value (or is a valueless operator) — upsert.
             by_field[field] = item
+        elif field in by_field:
+            # Item has no value but the field already has a filter.
+            # Check if the operator changed — if so, update the operator
+            # on the existing filter item.  This prevents the UI from
+            # "snapping back" to the old operator (e.g. "=" instead of
+            # ">") when the user changes the operator dropdown.
+            existing_op = by_field[field].get("operator", "")
+            if operator and operator != existing_op:
+                by_field[field] = {**by_field[field], "operator": operator}
 
     merged_items = list(by_field.values())
     if not merged_items:

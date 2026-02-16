@@ -32,6 +32,14 @@ This project is uv based, it is a reflex wrapper for mui x-data-grid UI componen
 - **Always-visible filter buttons in column headers**: Every column header must have a clickable filter icon/button on the right side of the header text. Clicking it opens the filter panel for that column. These buttons must always be visible (not hidden behind a hover or menu). This is a core UX requirement — users must see at a glance that columns are filterable and be able to filter with one click.
 - **Memory safety**: The grid must never hold more rows in memory (in `lf_grid_rows`) than what has been scrolled to. Each scroll chunk appends only the new slice. Filter/sort resets must clear accumulated rows and start fresh from offset 0.
 
+## Server-Side Filter Architecture (CRITICAL)
+
+- **Apply button pattern**: When `filterMode="server"`, the grid uses a custom `_FilterPanelWithApply` slot that adds Apply/Reset buttons below the standard `GridFilterPanel`. The `UnlimitedDataGrid` wrapper intercepts `onFilterModelChange` — user edits update a local React state only (no Python call), and the real Python callback is only invoked when Apply is clicked (or Enter is pressed). This prevents expensive server queries on every keystroke.
+- **Local filter model**: In server filter mode, the controlled `filterModel` prop from Python is replaced with a local React state (`localFilterModel`). This local state syncs from the Python prop only when the prop genuinely changes (detected via `JSON.stringify` comparison). This prevents MUI from resetting the user's in-progress edits when unrelated state vars (like `lf_grid_loading`) cause re-renders.
+- **Custom event dispatch**: The Apply button dispatches a `_applyFilter` CustomEvent (with `bubbles: true`) on the MUI grid root element. The `UnlimitedDataGrid` wrapper listens for this event on its container div and forwards the filter model to the real Python `onFilterModelChange` callback.
+- **Operator preservation in merge_filter_model**: When MUI sends a filter item with a changed operator but no value (user changed the operator dropdown), `merge_filter_model` updates the operator on the existing accumulated filter item instead of ignoring the change. This prevents the operator from "snapping back" to the previous value.
+- **Case-insensitive field name resolution (CRITICAL)**: Reflex's serialisation layer may convert column names to different cases (e.g. `DP` → `dp`, `MIN_DP` → `min_dp`). All filter/sort/value-options code MUST use `_resolve_field_name(raw_field, schema)` to resolve field names case-insensitively against the schema before using them in Polars expressions. Never do `if field not in schema` directly — always resolve first. The canonical column name from the schema must be used in `pl.col(field)` calls to avoid DataFusion predicate pushdown errors.
+
 ## Coding Standards
 
 - **Avoid nested try-catch**: try catch often just hide errors, put them only when errors is what we consider unavoidable in the use-case.
@@ -40,6 +48,7 @@ This project is uv based, it is a reflex wrapper for mui x-data-grid UI componen
 - **No relative imports**: Always use absolute imports.
 - **No placeholders**: Never use `/my/custom/path/` in code.
 - **No legacy support**: Refactor aggressively; do not keep old API functions.
+- **Publishing to PyPI**: The PyPI publish token is stored in `.env` as `PYPI_TOKEN`. Source the file before publishing: `set -a && source .env && set +a && uv publish --token "$PYPI_TOKEN" dist/PACKAGE_FILES`. Note that `.env` values are quoted — you must `source` the file (not just export the raw string) so the shell strips the quotes.
 - **Dependency Management**: Use `uv sync` and `uv add`. NEVER use `uv pip install`.
 - **Versions**: Do not hardcode versions in `__init__.py`; use `pyproject.toml`.
 - **Avoid __all__**: Avoid `__init__.py` with `__all__` as it confuses where things are located.
