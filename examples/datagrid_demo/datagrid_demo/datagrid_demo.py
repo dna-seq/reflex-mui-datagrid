@@ -1,17 +1,17 @@
 """Example Reflex app demonstrating the MUI X DataGrid wrapper.
 
 Four tabs:
-  1. Employee data -- scrollable grid (no pagination), using the universal
-     ``lazyframe_to_datagrid`` (no polars-bio dependency).
-  2. Genomic Variants (VCF) -- loaded via polars-bio ``scan_vcf``, using
-     ``bio_lazyframe_to_datagrid`` which auto-extracts column descriptions
-     from the VCF header.  Uses the small sample VCF.
-  3. Longevity Map (Parquet) -- loads a parquet file from HuggingFace via
-     polars' native ``hf://`` protocol.  Demonstrates that the DataGrid
-     component generalises beyond VCF to arbitrary tabular data.
-  4. Full Genome (Server-Side) -- demonstrates scroll-driven infinite
-     loading, filtering, and sorting on a ~4.5 M row whole-genome VCF
-     using the reusable ``LazyFrameGridMixin`` and ``lazyframe_grid()``.
+  1. Employee data -- small client-side scrollable grid (no pagination).
+  2. Genomic Variants (VCF) -- small client-side VCF grid with
+     auto-extracted column descriptions.
+  3. Longevity Map (Parquet) -- **server-side** lazy grid loaded from
+     HuggingFace via ``hf://``.  Uses ``LazyFrameGridMixin`` for
+     server-side filtering, sorting, and scroll-loading.
+  4. Full Genome (Server-Side) -- ~4.5 M row whole-genome VCF with
+     server-side scroll-loading via a second ``LazyFrameGridMixin``.
+
+Tabs 3 and 4 each use their own ``LazyFrameGridMixin`` substate so
+they get independent ``lf_grid_*`` state vars and caches.
 """
 
 from pathlib import Path
@@ -101,15 +101,66 @@ def _build_employee_lazyframe() -> pl.LazyFrame:
 
 
 # ---------------------------------------------------------------------------
-# State
+# Substates for server-side grids
 # ---------------------------------------------------------------------------
 
-class AppState(LazyFrameGridMixin):
-    """Application state holding data for all tabs.
+class ParquetState(LazyFrameGridMixin):
+    """Server-side lazy grid for the Longevity Map parquet dataset.
 
-    Inherits from ``LazyFrameGridMixin`` (which extends ``rx.State``)
-    to get server-side scroll-loading state vars and handlers
-    (prefixed ``lf_grid_*``) for the genome tab.
+    Each ``LazyFrameGridMixin`` substate gets its own independent set
+    of ``lf_grid_*`` state vars and its own LazyFrame cache (keyed by
+    class name).
+    """
+
+    pq_loaded: bool = False
+    pq_loading_init: bool = False
+
+    def load_parquet(self):
+        """Scan the parquet from HuggingFace and prepare for lazy browsing."""
+        self.pq_loading_init = True  # type: ignore[assignment]
+        yield
+
+        lf = pl.scan_parquet(PARQUET_HF_URL)
+        yield from self.set_lazyframe(lf)
+        self.pq_loaded = True  # type: ignore[assignment]
+        self.pq_loading_init = False  # type: ignore[assignment]
+
+
+class GenomeState(LazyFrameGridMixin):
+    """Server-side lazy grid for the full genome VCF (~4.5 M rows).
+
+    Each ``LazyFrameGridMixin`` substate gets its own independent set
+    of ``lf_grid_*`` state vars and its own LazyFrame cache.
+    """
+
+    genome_available: bool = False
+
+    def check_genome(self) -> None:
+        """Check if the genome file exists on disk."""
+        self.genome_available = GENOME_PATH.exists()
+
+    def load_genome(self):
+        """Scan the genome VCF and prepare for lazy browsing."""
+        if not GENOME_PATH.exists():
+            self.lf_grid_selected_info = (  # type: ignore[assignment]
+                "Genome file not found. "
+                "Run: uv run demo download-genome"
+            )
+            return
+
+        lf, descriptions = scan_file(GENOME_PATH)
+        yield from self.set_lazyframe(lf, descriptions)
+
+
+# ---------------------------------------------------------------------------
+# Main app state (client-side grids only)
+# ---------------------------------------------------------------------------
+
+class AppState(rx.State):
+    """Application state holding data for the small client-side tabs.
+
+    The Parquet and Genome tabs use their own ``LazyFrameGridMixin``
+    substates (``ParquetState`` and ``GenomeState``).
     """
 
     # Employee tab
@@ -123,27 +174,14 @@ class AppState(LazyFrameGridMixin):
     vcf_selected: str = "Click a variant to see its details."
     vcf_row_count: int = 0
 
-    # Parquet tab
-    pq_rows: list[dict[str, Any]] = []
-    pq_columns: list[dict[str, Any]] = []
-    pq_selected: str = "Click a row to see its details."
-    pq_row_count: int = 0
-    pq_loading: bool = False
-    pq_loaded: bool = False
-    pq_error: str = ""
-
-    # Genome tab (only need availability flag -- everything else is in the mixin)
-    genome_available: bool = False
-
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
 
     def load_all(self) -> None:
-        """Load both small datasets on page load."""
+        """Load the small client-side datasets on page load."""
         self._load_employees()
         self._load_vcf()
-        self.genome_available = GENOME_PATH.exists()
 
     def _load_employees(self) -> None:
         lf = _build_employee_lazyframe()
@@ -196,61 +234,6 @@ class AppState(LazyFrameGridMixin):
                 lines.append(f"{field}: {value}")
         self.vcf_selected = "\n".join(lines)
 
-    # ------------------------------------------------------------------
-    # Parquet (HuggingFace) handlers
-    # ------------------------------------------------------------------
-
-    def load_parquet(self):
-        """Load the longevity-map parquet from HuggingFace via polars ``hf://``.
-
-        Uses polars' native HuggingFace integration -- no fsspec needed.
-        This is a generator so the loading spinner shows immediately.
-        """
-        self.pq_loading = True  # type: ignore[assignment]
-        self.pq_error = ""  # type: ignore[assignment]
-        yield  # send loading state to frontend
-
-        lf = pl.scan_parquet(PARQUET_HF_URL)
-        rows, col_defs = lazyframe_to_datagrid(lf)
-        self.pq_rows = rows
-        self.pq_columns = [c.dict() for c in col_defs]
-        self.pq_row_count = len(rows)
-        self.pq_loading = False  # type: ignore[assignment]
-        self.pq_loaded = True  # type: ignore[assignment]
-
-    def handle_pq_row_click(self, params: dict[str, Any]) -> None:
-        """Handle parquet row click -- show all fields."""
-        row: dict[str, Any] = params.get("row", {})
-        if not row:
-            return
-
-        lines: list[str] = []
-        for field, value in row.items():
-            if field == "__row_id__":
-                continue
-            lines.append(f"{field}: {value}")
-        self.pq_selected = "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    # Full genome (server-side via LazyFrameGridMixin)
-    # ------------------------------------------------------------------
-
-    def load_genome(self):
-        """Prepare the full genome VCF for server-side browsing.
-
-        Uses ``scan_file`` + ``set_lazyframe`` from the mixin -- the
-        LazyFrame is never fully collected into memory.
-        """
-        if not GENOME_PATH.exists():
-            self.lf_grid_selected_info = (
-                "Genome file not found. "
-                "Run: uv run demo download-genome"
-            )
-            return
-
-        lf, descriptions = scan_file(GENOME_PATH)
-        yield from self.set_lazyframe(lf, descriptions)
-
 
 # ---------------------------------------------------------------------------
 # UI components
@@ -273,7 +256,8 @@ def employee_tab() -> rx.Component:
         rx.text(
             "A 20-row employee dataset built from an inline polars LazyFrame. "
             "Columns like Department auto-detect as dropdown filters. "
-            "No pagination -- all rows are scrollable.",
+            "No pagination -- all rows are scrollable. "
+            "Client-side filtering (MUI Community: single filter at a time).",
             margin_bottom="1em",
             color="var(--gray-11)",
         ),
@@ -312,7 +296,7 @@ def vcf_tab() -> rx.Component:
             ". Hover over a column header to see its description. "
             "No pagination -- all rows are scrollable (MUI's built-in row "
             "virtualisation only renders visible DOM rows). "
-            "Low-cardinality columns like Filter and GT get dropdown filters automatically.",
+            "Client-side filtering (MUI Community: single filter at a time).",
             margin_bottom="1em",
             color="var(--gray-11)",
         ),
@@ -354,7 +338,7 @@ def vcf_tab() -> rx.Component:
 
 
 def parquet_tab() -> rx.Component:
-    """Longevity Map parquet tab content."""
+    """Longevity Map parquet tab -- server-side via ParquetState."""
     return rx.box(
         rx.text(
             "Longevity-map weights loaded from a ",
@@ -364,69 +348,41 @@ def parquet_tab() -> rx.Component:
             ),
             " via polars' native ",
             rx.code("hf://"),
-            " protocol -- no fsspec or manual download needed. "
-            "Demonstrates that the DataGrid component generalises to "
-            "arbitrary tabular data beyond VCF files.",
+            " protocol -- no fsspec or manual download needed. ",
+            rx.text("Server-side", weight="bold", as_="span"),
+            " filtering, sorting, and scroll-loading via ",
+            rx.code("LazyFrameGridMixin"),
+            ". Multi-column filters accumulate on the backend.",
             margin_bottom="1em",
             color="var(--gray-11)",
         ),
         rx.cond(
-            AppState.pq_loaded,
-            # Data loaded -- show grid
+            ParquetState.pq_loaded,
+            # Data loaded -- show server-side grid
             rx.fragment(
-                rx.text(
-                    AppState.pq_row_count.to(str),  # type: ignore[union-attr]
-                    " rows loaded from HuggingFace",
-                    size="2",
-                    color="var(--gray-9)",
-                    margin_bottom="0.5em",
-                ),
-                data_grid(
-                    rows=AppState.pq_rows,
-                    columns=AppState.pq_columns,
-                    row_id_field="__row_id__",
-                    pagination=False,
-                    hide_footer=True,
-                    show_toolbar=True,
-                    density="compact",
-                    on_row_click=AppState.handle_pq_row_click,
-                    height="540px",
-                    width="100%",
-                ),
+                lazyframe_grid_stats_bar(ParquetState),
+                lazyframe_grid(ParquetState, height="540px", density="compact"),
+                lazyframe_grid_code_panel(ParquetState),
             ),
             # Not loaded yet -- show load button
             rx.box(
                 rx.button(
                     "Load Parquet from HuggingFace",
-                    on_click=AppState.load_parquet,
-                    loading=AppState.pq_loading,
+                    on_click=ParquetState.load_parquet,
+                    loading=ParquetState.pq_loading_init,
                     size="3",
                 ),
                 rx.text(
                     "Click to fetch the longevity-map weights parquet (~26 KB) "
-                    "directly from HuggingFace using polars' native hf:// protocol.",
+                    "directly from HuggingFace using polars' native hf:// protocol. "
+                    "Data is scanned lazily -- only page slices are collected.",
                     size="2",
                     color="var(--gray-9)",
                     margin_top="0.5em",
                 ),
-                rx.cond(
-                    AppState.pq_error != "",
-                    rx.callout(
-                        AppState.pq_error,
-                        icon="triangle_alert",
-                        color_scheme="red",
-                        margin_top="1em",
-                    ),
-                ),
             ),
         ),
-        _status_box(
-            rx.text(
-                AppState.pq_selected,
-                white_space="pre-wrap",
-                size="2",
-            ),
-        ),
+        lazyframe_grid_detail_box(ParquetState),
         padding_top="1em",
     )
 
@@ -454,8 +410,8 @@ def _genome_load_button() -> rx.Component:
     return rx.box(
         rx.button(
             "Load Genome",
-            on_click=AppState.load_genome,
-            loading=AppState.lf_grid_loading,
+            on_click=GenomeState.load_genome,
+            loading=GenomeState.lf_grid_loading,
             size="3",
         ),
         rx.text(
@@ -469,11 +425,11 @@ def _genome_load_button() -> rx.Component:
 
 
 def _genome_grid() -> rx.Component:
-    """The scroll-loading DataGrid for the genome, powered by the mixin."""
+    """The scroll-loading DataGrid for the genome, powered by GenomeState."""
     return rx.fragment(
-        lazyframe_grid_stats_bar(AppState),
-        lazyframe_grid(AppState),
-        lazyframe_grid_code_panel(AppState),
+        lazyframe_grid_stats_bar(GenomeState),
+        lazyframe_grid(GenomeState),
+        lazyframe_grid_code_panel(GenomeState),
     )
 
 
@@ -486,22 +442,23 @@ def genome_tab() -> rx.Component:
             " scroll-loading, filtering, and sorting. "
             "Rows are loaded in chunks as you scroll near the bottom. "
             "Filter and sort operations run as Polars expressions on the "
-            "backend -- no full-table collect for each interaction.",
+            "backend -- no full-table collect for each interaction. "
+            "Multi-column filters accumulate on the backend.",
             margin_bottom="1em",
             color="var(--gray-11)",
         ),
         rx.cond(
-            AppState.genome_available,
+            GenomeState.genome_available,
             # File exists
             rx.cond(
-                AppState.lf_grid_loaded,
+                GenomeState.lf_grid_loaded,
                 _genome_grid(),
                 _genome_load_button(),
             ),
             # File not downloaded
             _genome_download_box(),
         ),
-        lazyframe_grid_detail_box(AppState),
+        lazyframe_grid_detail_box(GenomeState),
         padding_top="1em",
     )
 
@@ -530,4 +487,7 @@ def index() -> rx.Component:
 
 
 app = rx.App()
-app.add_page(index, on_load=AppState.load_all)
+app.add_page(
+    index,
+    on_load=[AppState.load_all, GenomeState.check_genome],
+)

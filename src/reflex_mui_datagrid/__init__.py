@@ -16,7 +16,9 @@ from reflex_mui_datagrid.lazyframe_grid import (
     lazyframe_grid,
     lazyframe_grid_code_panel,
     lazyframe_grid_detail_box,
+    lazyframe_grid_filter_debug,
     lazyframe_grid_stats_bar,
+    merge_filter_model,
     scan_file,
 )
 from reflex_mui_datagrid.models import ColumnDef
@@ -25,6 +27,7 @@ from reflex_mui_datagrid.polars_utils import (
     apply_sort_model,
     build_column_defs_from_schema,
     generate_polars_code,
+    generate_sql_where,
     lazyframe_to_datagrid,
     polars_dtype_to_grid_type,
     show_dataframe,

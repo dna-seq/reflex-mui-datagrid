@@ -25,6 +25,7 @@ Typical usage::
         return rx.cond(MyState.lf_grid_loaded, lazyframe_grid(MyState))
 """
 
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ from reflex_mui_datagrid.polars_utils import (
     apply_sort_model,
     build_column_defs_from_schema,
     generate_polars_code,
+    generate_sql_where,
 )
 
 
@@ -277,7 +279,12 @@ class LazyFrameGridMixin(rx.State):
     lf_grid_stats: str = ""
     lf_grid_selected_info: str = "Click a row to see details."
     lf_grid_query_code: str = ""
+    lf_grid_query_sql: str = ""
     lf_grid_query_plan: str = ""
+    lf_grid_filter_debug: str = "No active filters or sorts."
+    lf_grid_filter_preset_json: str = ""
+    lf_grid_filter_model: dict[str, Any] = {"items": []}
+    lf_grid_active_filter_fields: list[str] = []
     lf_grid_pagination_model: dict[str, int] = {
         "page": 0,
         "pageSize": _DEFAULT_CHUNK_SIZE,
@@ -352,6 +359,8 @@ class LazyFrameGridMixin(rx.State):
         self.lf_grid_loaded = True  # type: ignore[assignment]
         self._lf_grid_filter = {}  # type: ignore[assignment]
         self._lf_grid_sort = []  # type: ignore[assignment]
+        self.lf_grid_filter_model = {"items": []}  # type: ignore[assignment]
+        self.lf_grid_active_filter_fields = []  # type: ignore[assignment]
         self.lf_grid_pagination_model = {  # type: ignore[assignment]
             "page": 0,
             "pageSize": chunk_size,
@@ -368,12 +377,26 @@ class LazyFrameGridMixin(rx.State):
     # ------------------------------------------------------------------
 
     def handle_lf_grid_filter(self, filter_model: dict[str, Any]):
-        """Handle server-side filter change -- reset scroll stream to top.
+        """Handle server-side filter change with multi-column accumulation.
+
+        MUI DataGrid Community edition only sends one filter item at a
+        time (``disableMultipleColumnsFiltering`` is forced ``true``).
+        To support multi-column filtering on the server side, this
+        handler **merges** each incoming filter item into the
+        accumulated ``_lf_grid_filter`` instead of replacing it:
+
+        * An item **with a value** upserts into the accumulated set
+          (updates the existing item for that column, or adds a new one).
+        * An item **without a value** for a column that already has a
+          filter is ignored (the user just opened the filter panel on
+          that column — the existing filter is preserved).
+        * An item **without a value** for a new column is ignored (no
+          filter to apply yet).
+        * An **empty items list** clears all accumulated filters.
 
         On first filter interaction with a string column, lazily computes
         its value options (distinct values for dropdown) and updates the
-        column definitions.  This avoids scanning all string columns at
-        init time.
+        column definitions.
 
         This is a generator so the loading/stats state is pushed to the
         frontend *before* the potentially expensive Polars query runs.
@@ -382,14 +405,19 @@ class LazyFrameGridMixin(rx.State):
         self.lf_grid_stats = "Filtering..."  # type: ignore[assignment]
         yield
 
+        # Keep the MUI frontend filter model in sync (controlled component).
+        self.lf_grid_filter_model = filter_model  # type: ignore[assignment]
+
         # Lazily compute value options for any newly-filtered columns.
         self._ensure_value_options_for_filter(filter_model)
 
-        self._lf_grid_filter = filter_model  # type: ignore[assignment]
+        merged = self._merge_filter_model(filter_model)
+        self._lf_grid_filter = merged  # type: ignore[assignment]
         page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
         self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
         self._refresh_lf_grid_page(append=False, refresh_row_count=True)
         self._regenerate_query_code()
+        self._update_filter_debug()
         self.lf_grid_loading = False  # type: ignore[assignment]
 
     def handle_lf_grid_sort(self, sort_model: list[dict[str, Any]]):
@@ -407,6 +435,7 @@ class LazyFrameGridMixin(rx.State):
         self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
         self._refresh_lf_grid_page(append=False, refresh_row_count=True)
         self._regenerate_query_code()
+        self._update_filter_debug()
         self.lf_grid_loading = False  # type: ignore[assignment]
 
     def handle_lf_grid_scroll_end(self, _params: dict[str, Any]):
@@ -461,6 +490,149 @@ class LazyFrameGridMixin(rx.State):
                 lines.append(f"{field}: {value}")
         self.lf_grid_selected_info = "\n".join(lines)  # type: ignore[assignment]
 
+    def clear_lf_grid_filters(self):
+        """Clear all accumulated server-side filters and the MUI grid UI.
+
+        Resets both the backend accumulated filter and the frontend
+        MUI DataGrid ``filterModel`` so the grid UI shows no active
+        filter.
+
+        This is a generator so the loading state is pushed immediately.
+        """
+        self.lf_grid_loading = True  # type: ignore[assignment]
+        self.lf_grid_stats = "Clearing filters..."  # type: ignore[assignment]
+        yield
+
+        self._lf_grid_filter = {}  # type: ignore[assignment]
+        self.lf_grid_filter_model = {"items": []}  # type: ignore[assignment]
+        page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
+        self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
+        self._refresh_lf_grid_page(append=False, refresh_row_count=True)
+        self._regenerate_query_code()
+        self._update_filter_debug()
+        self.lf_grid_loading = False  # type: ignore[assignment]
+
+    def download_lf_grid_preset(self) -> rx.event.EventSpec:
+        """Download the current filter/sort state as a JSON preset file.
+
+        Returns an ``rx.download`` event that triggers a browser download
+        of the filter state as ``filter_preset.json``.
+        """
+        preset: dict[str, Any] = {
+            "filter_model": self._lf_grid_filter or {},
+            "sort_model": self._lf_grid_sort or [],
+        }
+        return rx.download(  # type: ignore[return-value]
+            data=json.dumps(preset, indent=2, ensure_ascii=False),
+            filename="filter_preset.json",
+        )
+
+    async def handle_lf_grid_preset_upload(self, files: list[rx.UploadFile]):
+        """Handle upload of a JSON filter preset and apply it to the grid.
+
+        Reads the uploaded JSON file, validates its structure, sets the
+        filter and sort state, and refreshes the grid.
+
+        This is an async generator so loading state is pushed to the
+        frontend immediately.
+        """
+        if not files:
+            return
+
+        self.lf_grid_loading = True  # type: ignore[assignment]
+        self.lf_grid_stats = "Applying preset..."  # type: ignore[assignment]
+        yield
+
+        upload_file = files[0]
+        content = await upload_file.read()
+        text = content.decode("utf-8") if isinstance(content, bytes) else content
+        preset = json.loads(text)
+
+        filter_model: dict[str, Any] = preset.get("filter_model", {})
+        sort_model: list[dict[str, Any]] = preset.get("sort_model", [])
+
+        self._lf_grid_filter = filter_model  # type: ignore[assignment]
+        self._lf_grid_sort = sort_model  # type: ignore[assignment]
+
+        # Update the MUI frontend filter model so the grid UI reflects
+        # the uploaded preset.  MUI Community only shows one filter at
+        # a time, so we show the last item (if any).
+        items = filter_model.get("items", [])
+        if items:
+            last_item = items[-1]
+            self.lf_grid_filter_model = {  # type: ignore[assignment]
+                "items": [last_item],
+                "logicOperator": filter_model.get("logicOperator", "and"),
+            }
+        else:
+            self.lf_grid_filter_model = {"items": []}  # type: ignore[assignment]
+
+        page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
+        self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
+        self._refresh_lf_grid_page(append=False, refresh_row_count=True)
+        self._regenerate_query_code()
+        self._update_filter_debug()
+        self.lf_grid_loading = False  # type: ignore[assignment]
+
+        n_filters = len(items)
+        n_sorts = len(sort_model)
+        self.lf_grid_selected_info = (  # type: ignore[assignment]
+            f"Preset applied: {n_filters} filter(s), {n_sorts} sort(s). "
+            f"{self.lf_grid_row_count:,} rows match."
+        )
+
+    def _merge_filter_model(
+        self,
+        incoming: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Merge incoming filter into the accumulated ``_lf_grid_filter``.
+
+        Delegates to the module-level :func:`merge_filter_model`.
+        """
+        return merge_filter_model(self._lf_grid_filter or {}, incoming)
+
+    def _update_filter_debug(self) -> None:
+        """Rebuild the human-readable filter/sort debug string and active filter fields."""
+        lines: list[str] = []
+
+        # Filters
+        items: list[dict[str, Any]] = []
+        if self._lf_grid_filter and self._lf_grid_filter.get("items"):
+            items = self._lf_grid_filter["items"]
+
+        # Update the list of field names with active filters (drives
+        # the highlighted filter icon in column headers).
+        active_fields: list[str] = []
+        for item in items:
+            field = item.get("field")
+            if field:
+                active_fields.append(field)
+        self.lf_grid_active_filter_fields = active_fields  # type: ignore[assignment]
+
+        if items:
+            logic = self._lf_grid_filter.get("logicOperator", "and").upper()
+            lines.append(f"FILTERS ({logic}):")
+            for i, item in enumerate(items):
+                field = item.get("field", "?")
+                op = item.get("operator", "?")
+                val = item.get("value")
+                val_str = repr(val) if val is not None else "(empty)"
+                lines.append(f"  {i + 1}. {field} {op} {val_str}")
+        else:
+            lines.append("FILTERS: none")
+
+        # Sorts
+        if self._lf_grid_sort:
+            lines.append("SORTS:")
+            for i, entry in enumerate(self._lf_grid_sort):
+                field = entry.get("field", "?")
+                direction = entry.get("sort", "asc")
+                lines.append(f"  {i + 1}. {field} {direction}")
+        else:
+            lines.append("SORTS: none")
+
+        self.lf_grid_filter_debug = "\n".join(lines)  # type: ignore[assignment]
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -511,17 +683,36 @@ class LazyFrameGridMixin(rx.State):
             self.lf_grid_columns = cache.col_defs  # type: ignore[assignment]
 
     def _regenerate_query_code(self) -> None:
-        """Regenerate the Polars code snippet and query plan from current filter/sort state."""
+        """Regenerate the Polars code, SQL, query plan, and filter JSON from current state."""
         cache_id = self._lf_grid_cache_id
         if not cache_id:
             return
         cache = _get_cache(cache_id)
         schema = cache.schema
 
+        filter_model = self._lf_grid_filter or None
+        sort_model = self._lf_grid_sort or None
+
         self.lf_grid_query_code = generate_polars_code(  # type: ignore[assignment]
-            filter_model=self._lf_grid_filter or None,
-            sort_model=self._lf_grid_sort or None,
+            filter_model=filter_model,
+            sort_model=sort_model,
             schema=schema,
+        )
+
+        self.lf_grid_query_sql = generate_sql_where(  # type: ignore[assignment]
+            filter_model=filter_model,
+            sort_model=sort_model,
+            schema=schema,
+        )
+
+        # Build the filter JSON for download/display.
+        preset: dict[str, Any] = {
+            "filter_model": self._lf_grid_filter or {},
+            "sort_model": self._lf_grid_sort or [],
+        }
+        has_content = bool(preset["filter_model"].get("items")) or bool(preset["sort_model"])
+        self.lf_grid_filter_preset_json = (  # type: ignore[assignment]
+            json.dumps(preset, indent=2, ensure_ascii=False) if has_content else ""
         )
 
         # Build the actual filtered+sorted LazyFrame and capture its
@@ -624,6 +815,7 @@ def lazyframe_grid(
     scroll_end_threshold: int = 260,
     show_toolbar: bool = True,
     show_description_in_header: bool = True,
+    show_filter_panel: bool = True,
     debug_log: bool = True,
     on_row_click: Any = None,
     **extra_props: Any,
@@ -633,6 +825,12 @@ def lazyframe_grid(
     This creates a DataGrid component with server-side filtering,
     sorting, and scroll-loading already connected to the mixin's
     event handlers and state variables.
+
+    By default the filter panel is shown below the grid.  It displays
+    the active filters/sorts in human-readable form, the Filter JSON
+    (copy-pasteable / downloadable), and buttons to upload a saved
+    filter preset or clear all filters.  Pass
+    ``show_filter_panel=False`` to hide it.
 
     Args:
         state_cls: The ``rx.State`` subclass that also inherits from
@@ -645,18 +843,20 @@ def lazyframe_grid(
             the next chunk load.
         show_toolbar: Show the MUI toolbar.
         show_description_in_header: Show column descriptions as subtitles.
+        show_filter_panel: Show the filter debug / Filter JSON panel
+            below the grid.  Defaults to ``True``.
         debug_log: Enable browser console debug logging.
         on_row_click: Override the default row-click handler.  If ``None``,
             uses the mixin's ``handle_lf_grid_row_click``.
         **extra_props: Additional props forwarded to ``data_grid()``.
 
     Returns:
-        A ``data_grid(...)`` Reflex component.
+        A Reflex component (the grid, optionally followed by the filter panel).
     """
     if on_row_click is None:
         on_row_click = state_cls.handle_lf_grid_row_click
 
-    return data_grid(
+    grid = data_grid(
         rows=state_cls.lf_grid_rows,
         columns=state_cls.lf_grid_columns,
         row_id_field="__row_id__",
@@ -665,6 +865,10 @@ def lazyframe_grid(
         hide_footer=True,
         filter_mode="server",
         sorting_mode="server",
+        # -- Controlled filter model (so "Clear All" resets the MUI UI) --
+        filter_model=state_cls.lf_grid_filter_model,
+        # -- Active filter fields (highlights filter icons in column headers) --
+        active_filter_fields=state_cls.lf_grid_active_filter_fields,
         # -- Display --
         loading=state_cls.lf_grid_loading,
         show_toolbar=show_toolbar,
@@ -682,6 +886,14 @@ def lazyframe_grid(
         height=height,
         width=width,
         **extra_props,
+    )
+
+    if not show_filter_panel:
+        return grid
+
+    return rx.fragment(
+        grid,
+        lazyframe_grid_filter_debug(state_cls),
     )
 
 
@@ -735,17 +947,20 @@ def lazyframe_grid_stats_bar(state_cls: type) -> rx.Component:
 
 
 def lazyframe_grid_code_panel(state_cls: type) -> rx.Component:
-    """Return a panel showing the generated Polars code and query plan.
+    """Return a panel showing generated code, SQL, query plan, and filter presets.
 
-    Displays two tabs:
+    Displays four tabs:
 
     * **Python Code** -- copy-pasteable Polars code reproducing the
       current filter/sort.
+    * **SQL** -- copy-pasteable SQL WHERE clause for DuckDB/Postgres/etc.
     * **Query Plan** -- the optimized Polars query plan that would
       execute.
+    * **Filter JSON** -- the raw filter/sort model as JSON, downloadable
+      and re-uploadable to restore the same filters later.
 
-    Both tabs have a copy-to-clipboard button.  A download button lets
-    the user save the Python code as a ``.py`` file.
+    All tabs have copy-to-clipboard and download buttons.  The Preset
+    tab also has an upload button to restore saved presets.
 
     The panel is hidden when there are no active filters or sorts.
 
@@ -788,6 +1003,38 @@ def lazyframe_grid_code_panel(state_cls: type) -> rx.Component:
         ),
     )
 
+    sql_tab = rx.box(
+        rx.hstack(
+            rx.spacer(),
+            rx.button(
+                rx.icon("clipboard_copy", size=14),
+                "Copy",
+                size="1",
+                variant="ghost",
+                on_click=rx.set_clipboard(state_cls.lf_grid_query_sql),  # type: ignore[arg-type]
+            ),
+            rx.button(
+                rx.icon("download", size=14),
+                "Download .sql",
+                size="1",
+                variant="ghost",
+                on_click=rx.download(  # type: ignore[arg-type]
+                    data=state_cls.lf_grid_query_sql,
+                    filename="filter_query.sql",
+                ),
+            ),
+            align="center",
+            spacing="2",
+            width="100%",
+        ),
+        rx.code_block(
+            state_cls.lf_grid_query_sql,
+            language="sql",
+            show_line_numbers=True,
+            wrap_long_lines=True,
+        ),
+    )
+
     plan_tab = rx.box(
         rx.hstack(
             rx.spacer(),
@@ -820,13 +1067,48 @@ def lazyframe_grid_code_panel(state_cls: type) -> rx.Component:
         ),
     )
 
+    preset_tab = rx.box(
+        rx.hstack(
+            rx.spacer(),
+            rx.button(
+                rx.icon("clipboard_copy", size=14),
+                "Copy",
+                size="1",
+                variant="ghost",
+                on_click=rx.set_clipboard(state_cls.lf_grid_filter_preset_json),  # type: ignore[arg-type]
+            ),
+            rx.button(
+                rx.icon("download", size=14),
+                "Download Filters",
+                size="1",
+                variant="ghost",
+                on_click=state_cls.download_lf_grid_preset,
+            ),
+            align="center",
+            spacing="2",
+            width="100%",
+        ),
+        rx.code_block(
+            state_cls.lf_grid_filter_preset_json,
+            language="json",
+            show_line_numbers=True,
+            wrap_long_lines=True,
+        ),
+        rx.text(
+            "Save this filter JSON and upload it later to restore the same filters.",
+            size="1",
+            color="var(--gray-9)",
+            margin_top="0.3em",
+        ),
+    )
+
     return rx.cond(
         state_cls.lf_grid_query_code != "",
         rx.box(
             rx.hstack(
                 rx.icon("code_2", size=16, color="var(--blue-9)"),
                 rx.text(
-                    "Polars Query",
+                    "Query / Preset",
                     size="2",
                     weight="bold",
                     color="var(--blue-11)",
@@ -836,11 +1118,15 @@ def lazyframe_grid_code_panel(state_cls: type) -> rx.Component:
             ),
             rx.tabs.root(
                 rx.tabs.list(
-                    rx.tabs.trigger("Python Code", value="code"),
+                    rx.tabs.trigger("Python", value="code"),
+                    rx.tabs.trigger("SQL", value="sql"),
                     rx.tabs.trigger("Query Plan", value="plan"),
+                    rx.tabs.trigger("Filter JSON", value="preset"),
                 ),
                 rx.tabs.content(code_tab, value="code"),
+                rx.tabs.content(sql_tab, value="sql"),
                 rx.tabs.content(plan_tab, value="plan"),
+                rx.tabs.content(preset_tab, value="preset"),
                 default_value="code",
             ),
             padding="0.8em",
@@ -851,6 +1137,218 @@ def lazyframe_grid_code_panel(state_cls: type) -> rx.Component:
             margin_bottom="0.5em",
         ),
     )
+
+
+def lazyframe_grid_filter_debug(state_cls: type) -> rx.Component:
+    """Return a debug panel showing active accumulated filters and sorts.
+
+    Always visible (not hidden when empty).  Shows the current filter
+    items and sort entries in a human-readable format.  Includes a
+    "Clear All Filters" button and an "Upload Filters" button for
+    restoring saved filter JSON files.
+
+    Useful during development to verify which filters are actually
+    active on the server side.
+
+    Args:
+        state_cls: The ``rx.State`` subclass that inherits from
+            :class:`LazyFrameGridMixin`.
+
+    Returns:
+        A Reflex component.
+    """
+    upload_id = f"preset_upload_{state_cls.__name__}"
+
+    return rx.box(
+        rx.hstack(
+            rx.icon("bug", size=16, color="var(--orange-9)"),
+            rx.text(
+                "Filter / Sort Debug (server-side accumulated)",
+                size="2",
+                weight="bold",
+                color="var(--orange-11)",
+            ),
+            rx.spacer(),
+            rx.upload(
+                rx.button(
+                    rx.icon("upload", size=14),
+                    "Upload Filters",
+                    size="1",
+                    variant="outline",
+                    color_scheme="blue",
+                ),
+                id=upload_id,
+                accept={".json": ["application/json"]},
+                max_files=1,
+                no_drag=True,
+                on_drop=state_cls.handle_lf_grid_preset_upload(  # type: ignore[attr-defined]
+                    rx.upload_files(upload_id=upload_id)
+                ),
+                padding="0",
+                border="none",
+            ),
+            rx.button(
+                rx.icon("x", size=14),
+                "Clear All Filters",
+                size="1",
+                variant="outline",
+                color_scheme="orange",
+                on_click=state_cls.clear_lf_grid_filters,
+            ),
+            align="center",
+            spacing="2",
+            width="100%",
+        ),
+        rx.code_block(
+            state_cls.lf_grid_filter_debug,
+            language="log",
+            show_line_numbers=False,
+            wrap_long_lines=True,
+        ),
+        # Filter JSON -- always visible so users can copy-paste it directly.
+        rx.cond(
+            state_cls.lf_grid_filter_preset_json != "",
+            rx.box(
+                rx.hstack(
+                    rx.icon("braces", size=14, color="var(--orange-9)"),
+                    rx.text(
+                        "Filter JSON",
+                        size="1",
+                        weight="bold",
+                        color="var(--orange-11)",
+                    ),
+                    rx.spacer(),
+                    rx.button(
+                        rx.icon("clipboard_copy", size=12),
+                        "Copy",
+                        size="1",
+                        variant="ghost",
+                        color_scheme="orange",
+                        on_click=rx.set_clipboard(state_cls.lf_grid_filter_preset_json),  # type: ignore[arg-type]
+                    ),
+                    rx.button(
+                        rx.icon("download", size=12),
+                        "Download Filters",
+                        size="1",
+                        variant="ghost",
+                        color_scheme="orange",
+                        on_click=state_cls.download_lf_grid_preset,
+                    ),
+                    align="center",
+                    spacing="2",
+                    width="100%",
+                ),
+                rx.code_block(
+                    state_cls.lf_grid_filter_preset_json,
+                    language="json",
+                    show_line_numbers=False,
+                    wrap_long_lines=True,
+                ),
+                margin_top="0.5em",
+            ),
+        ),
+        padding="0.8em",
+        border_radius="8px",
+        background="var(--orange-a2)",
+        border="1px solid var(--orange-a5)",
+        margin_top="0.5em",
+        margin_bottom="0.5em",
+    )
+
+
+def merge_filter_model(
+    existing: dict[str, Any],
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge an incoming MUI filter model into an accumulated filter.
+
+    MUI DataGrid Community edition only sends one filter item at a
+    time.  This function merges each incoming item into the existing
+    accumulated set, keyed by ``field``:
+
+    * Incoming item **has a value** → upsert (replace or add) for
+      that field.
+    * Incoming item **has no value** and the field already has a
+      filter → keep the existing filter (user just opened the panel).
+    * Incoming item **has no value** and the field is new → ignore.
+    * Incoming items list is **empty** → clear all accumulated filters.
+
+    Args:
+        existing: The previously accumulated filter model (may be
+            empty ``{}``).
+        incoming: The new filter model from MUI's
+            ``onFilterModelChange`` callback.
+
+    Returns:
+        The merged filter model dict, or ``{}`` if no filters remain.
+    """
+    incoming_items: list[dict[str, Any]] = incoming.get("items", [])
+    logic: str = incoming.get("logicOperator", "and")
+
+    if not incoming_items:
+        return {}
+
+    existing_items: list[dict[str, Any]] = existing.get("items", []) if existing else []
+    by_field: dict[str, dict[str, Any]] = {}
+    for item in existing_items:
+        field = item.get("field")
+        if field:
+            by_field[field] = item
+
+    for item in incoming_items:
+        field = item.get("field")
+        if not field:
+            continue
+
+        has_value = item.get("value") is not None
+        operator = item.get("operator", "")
+        valueless_ops = {"isEmpty", "isNotEmpty"}
+        if operator in valueless_ops:
+            has_value = True
+
+        if has_value:
+            by_field[field] = item
+
+    merged_items = list(by_field.values())
+    if not merged_items:
+        return {}
+
+    return {
+        "items": merged_items,
+        "logicOperator": logic,
+    }
+
+
+def _format_filter_model_debug(filter_model: dict[str, Any]) -> str:
+    """Format a MUI filter model dict into a human-readable debug string."""
+    lines: list[str] = []
+    items: list[dict[str, Any]] = filter_model.get("items", []) if filter_model else []
+    if items:
+        logic = filter_model.get("logicOperator", "and").upper()
+        lines.append(f"FILTERS ({logic}):")
+        for i, item in enumerate(items):
+            field = item.get("field", "?")
+            op = item.get("operator", "?")
+            val = item.get("value")
+            val_str = repr(val) if val is not None else "(empty)"
+            lines.append(f"  {i + 1}. {field} {op} {val_str}")
+    else:
+        lines.append("FILTERS: none")
+    return "\n".join(lines)
+
+
+def _format_sort_model_debug(sort_model: list[dict[str, Any]]) -> str:
+    """Format a MUI sort model list into a human-readable debug string."""
+    lines: list[str] = []
+    if sort_model:
+        lines.append("SORTS:")
+        for i, entry in enumerate(sort_model):
+            field = entry.get("field", "?")
+            direction = entry.get("sort", "asc")
+            lines.append(f"  {i + 1}. {field} {direction}")
+    else:
+        lines.append("SORTS: none")
+    return "\n".join(lines)
 
 
 def lazyframe_grid_detail_box(state_cls: type) -> rx.Component:

@@ -49,6 +49,38 @@ def _is_categorical_dtype(dtype: pl.DataType) -> bool:
     return isinstance(dtype, (pl.Categorical, pl.Enum))
 
 
+def _col_to_str_expr(col: pl.Expr, dtype: pl.DataType) -> pl.Expr:
+    """Convert a column expression to a String, handling List/Struct types.
+
+    * ``List(T)`` → cast inner to String, then ``list.join(",")``
+    * ``Array(T, n)`` → cast to ``List(String)``, then ``list.join(",")``
+    * ``Struct`` → ``cast(pl.String)`` (Polars supports this natively)
+    * Everything else → ``cast(pl.String)``
+    """
+    if isinstance(dtype, pl.List):
+        return col.cast(pl.List(pl.String)).list.join(",")
+    if isinstance(dtype, pl.Array):
+        return col.cast(pl.List(pl.String)).list.join(",")
+    if isinstance(dtype, pl.Struct):
+        return col.cast(pl.String)
+    return col.cast(pl.String)
+
+
+def _col_to_str_code(col_code: str, dtype: pl.DataType) -> str:
+    """Return a code snippet that converts a column to String.
+
+    Mirrors :func:`_col_to_str_expr` but produces a Python code string
+    for :func:`_filter_item_to_code`.
+    """
+    if isinstance(dtype, pl.List):
+        return f'{col_code}.cast(pl.List(pl.String)).list.join(",")'
+    if isinstance(dtype, pl.Array):
+        return f'{col_code}.cast(pl.List(pl.String)).list.join(",")'
+    if isinstance(dtype, pl.Struct):
+        return f'{col_code}.cast(pl.String)'
+    return f'{col_code}.cast(pl.String)'
+
+
 def _detect_single_select(
     df: pl.DataFrame,
     col_name: str,
@@ -286,12 +318,13 @@ def _build_filter_expr(
     col = pl.col(field)
     dtype = schema[field]
     grid_type = polars_dtype_to_grid_type(dtype)
+    str_col = _col_to_str_expr(col, dtype)
 
     # -- operators that don't need a value --
     if operator == "isEmpty":
-        return col.is_null() | (col.cast(pl.String) == "")
+        return col.is_null() | (str_col == "")
     if operator == "isNotEmpty":
-        return col.is_not_null() & (col.cast(pl.String) != "")
+        return col.is_not_null() & (str_col != "")
 
     # Remaining operators require a value.
     if value is None:
@@ -299,17 +332,16 @@ def _build_filter_expr(
 
     # -- singleSelect operators --
     if operator == "is":
-        return col.cast(pl.String) == str(value)
+        return str_col == str(value)
     if operator == "not":
-        return col.cast(pl.String) != str(value)
+        return str_col != str(value)
     if operator == "isAnyOf":
         if not isinstance(value, list):
             return None
-        return col.cast(pl.String).is_in([str(v) for v in value])
+        return str_col.is_in([str(v) for v in value])
 
     # -- string operators --
     if grid_type == "string" or _is_categorical_dtype(dtype):
-        str_col = col.cast(pl.String)
         str_value = str(value)
         if operator == "contains":
             return str_col.str.contains(str_value, literal=True)
@@ -495,30 +527,30 @@ def _filter_item_to_code(
     col = f'pl.col("{field}")'
     dtype = schema[field]
     grid_type = polars_dtype_to_grid_type(dtype)
+    str_col = _col_to_str_code(col, dtype)
 
     # Operators that don't need a value
     if operator == "isEmpty":
-        return f'({col}.is_null() | ({col}.cast(pl.String) == ""))'
+        return f'({col}.is_null() | ({str_col} == ""))'
     if operator == "isNotEmpty":
-        return f'({col}.is_not_null() & ({col}.cast(pl.String) != ""))'
+        return f'({col}.is_not_null() & ({str_col} != ""))'
 
     if value is None:
         return None
 
     # singleSelect operators
     if operator == "is":
-        return f'{col}.cast(pl.String) == "{value}"'
+        return f'{str_col} == "{value}"'
     if operator == "not":
-        return f'{col}.cast(pl.String) != "{value}"'
+        return f'{str_col} != "{value}"'
     if operator == "isAnyOf":
         if not isinstance(value, list):
             return None
         vals_repr = repr([str(v) for v in value])
-        return f"{col}.cast(pl.String).is_in({vals_repr})"
+        return f"{str_col}.is_in({vals_repr})"
 
     # String operators
     if grid_type == "string" or _is_categorical_dtype(dtype):
-        str_col = f'{col}.cast(pl.String)'
         escaped = str(value).replace('"', '\\"')
         if operator == "contains":
             return f'{str_col}.str.contains("{escaped}", literal=True)'
@@ -625,6 +657,140 @@ def generate_polars_code(
     lines.append("# Collect the result:")
     lines.append("df = lf.collect()")
     return "\n".join(lines)
+
+
+def generate_sql_where(
+    filter_model: dict[str, Any] | None = None,
+    sort_model: list[dict[str, Any]] | None = None,
+    schema: pl.Schema | None = None,
+    *,
+    table_name: str = "df",
+) -> str:
+    """Generate a SQL WHERE clause from MUI filter/sort models.
+
+    Returns a SQL string that can be copy-pasted into DuckDB, Postgres,
+    SQLite, or any SQL-compatible tool.  The SQL assumes a table or view
+    named *table_name* already exists.
+
+    Args:
+        filter_model: MUI DataGrid filter model dict (may be ``None``
+            or empty).
+        sort_model: MUI DataGrid sort model list (may be ``None`` or
+            empty).
+        schema: The LazyFrame schema, used to determine column types
+            for generating correct filter expressions.
+        table_name: Name of the SQL table/view.  Defaults to ``"df"``.
+
+    Returns:
+        A string of valid SQL, or an empty string if there are no
+        active filters or sorts.
+    """
+    parts: list[str] = []
+    parts.append(f"SELECT * FROM {table_name}")
+
+    has_filter = False
+    if filter_model and filter_model.get("items") and schema is not None:
+        items = filter_model["items"]
+        logic: str = filter_model.get("logicOperator", "and").upper()
+        sql_conditions: list[str] = []
+        for item in items:
+            sql = _filter_item_to_sql(item, schema)
+            if sql is not None:
+                sql_conditions.append(sql)
+
+        if sql_conditions:
+            has_filter = True
+            joiner = f" {logic} "
+            where_clause = joiner.join(sql_conditions)
+            parts.append(f"WHERE {where_clause}")
+
+    has_sort = False
+    if sort_model:
+        order_parts: list[str] = []
+        for entry in sort_model:
+            field = entry.get("field")
+            direction = entry.get("sort", "asc").upper()
+            if field is None:
+                continue
+            order_parts.append(f'"{field}" {direction}')
+
+        if order_parts:
+            has_sort = True
+            parts.append(f"ORDER BY {', '.join(order_parts)}")
+
+    if not has_filter and not has_sort:
+        return ""
+
+    return "\n".join(parts) + ";"
+
+
+def _filter_item_to_sql(
+    item: dict[str, Any],
+    schema: pl.Schema,
+) -> str | None:
+    """Translate a single MUI filter item to a SQL condition string."""
+    field: str | None = item.get("field")
+    operator: str | None = item.get("operator")
+    value: Any = item.get("value")
+
+    if field is None or operator is None:
+        return None
+    if field not in schema:
+        return None
+
+    col = f'"{field}"'
+    dtype = schema[field]
+    grid_type = polars_dtype_to_grid_type(dtype)
+
+    # Operators that don't need a value
+    if operator == "isEmpty":
+        return f"({col} IS NULL OR CAST({col} AS TEXT) = '')"
+    if operator == "isNotEmpty":
+        return f"({col} IS NOT NULL AND CAST({col} AS TEXT) != '')"
+
+    if value is None:
+        return None
+
+    # singleSelect operators
+    if operator == "is":
+        escaped = str(value).replace("'", "''")
+        return f"CAST({col} AS TEXT) = '{escaped}'"
+    if operator == "not":
+        escaped = str(value).replace("'", "''")
+        return f"CAST({col} AS TEXT) != '{escaped}'"
+    if operator == "isAnyOf":
+        if not isinstance(value, list):
+            return None
+        vals = ", ".join(f"'{str(v).replace(chr(39), chr(39)*2)}'" for v in value)
+        return f"CAST({col} AS TEXT) IN ({vals})"
+
+    # String operators
+    if grid_type == "string" or _is_categorical_dtype(dtype):
+        escaped = str(value).replace("'", "''")
+        if operator == "contains":
+            return f"CAST({col} AS TEXT) LIKE '%{escaped}%'"
+        if operator == "equals":
+            return f"CAST({col} AS TEXT) = '{escaped}'"
+        if operator == "startsWith":
+            return f"CAST({col} AS TEXT) LIKE '{escaped}%'"
+        if operator == "endsWith":
+            return f"CAST({col} AS TEXT) LIKE '%{escaped}'"
+        return None
+
+    # Numeric operators
+    if grid_type == "number":
+        num_value = _coerce_numeric(value)
+        if num_value is None:
+            return None
+        if operator in ("=", "equals"):
+            return f"{col} = {num_value}"
+        if operator in ("!=", "not"):
+            return f"{col} != {num_value}"
+        if operator in (">", ">=", "<", "<="):
+            return f"{col} {operator} {num_value}"
+        return None
+
+    return None
 
 
 def _dataframe_to_dicts(df: pl.DataFrame) -> list[dict[str, Any]]:

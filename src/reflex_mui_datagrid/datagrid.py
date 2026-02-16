@@ -233,6 +233,15 @@ const _AlwaysVisibleFilterIconButton = (props) => {
   const apiRef = useGridApiContext_();
   const rootProps = useGridRootProps_();
 
+  // Detect whether this column has an active server-side filter.
+  // activeFilterFields is a list of field names with accumulated
+  // server-side filters (passed from the Python state).
+  const activeFields = rootProps.activeFilterFields || rootProps.active_filter_fields;
+  const hasActiveFilter = React.useMemo(() => {
+    if (!Array.isArray(activeFields)) return false;
+    return activeFields.includes(field);
+  }, [activeFields, field]);
+
   const handleClick = React.useCallback((event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -242,6 +251,12 @@ const _AlwaysVisibleFilterIconButton = (props) => {
     }
   }, [apiRef, field, onClick]);
 
+  // Active filter: blue icon; inactive: default grey.
+  const iconColor = hasActiveFilter ? "#1976d2" : undefined;
+  const iconStyle = hasActiveFilter
+    ? { color: iconColor, filter: "drop-shadow(0 0 2px rgba(25,118,210,0.4))" }
+    : {};
+
   const iconButton = React.createElement(
     rootProps.slots.baseIconButton,
     {
@@ -250,15 +265,23 @@ const _AlwaysVisibleFilterIconButton = (props) => {
       size: "small",
       tabIndex: -1,
       "aria-haspopup": "menu",
+      style: iconStyle,
       ...(rootProps.slotProps?.baseIconButton || {}),
     },
-    React.createElement(rootProps.slots.columnFilteredIcon, { fontSize: "small" })
+    React.createElement(rootProps.slots.columnFilteredIcon, {
+      fontSize: "small",
+      style: iconStyle,
+    })
   );
+
+  const tooltipTitle = hasActiveFilter
+    ? apiRef.current.getLocaleText("columnMenuFilter") + " (active)"
+    : apiRef.current.getLocaleText("columnMenuFilter");
 
   return React.createElement(
     rootProps.slots.baseTooltip,
     {
-      title: apiRef.current.getLocaleText("columnMenuFilter"),
+      title: tooltipTitle,
       enterDelay: 1000,
       ...(rootProps.slotProps?.baseTooltip || {}),
     },
@@ -606,6 +629,7 @@ class DataGrid(rx.Component):
     always_show_filter_icon: rx.Var[bool]
     filter_debounce_ms: rx.Var[int]
     filter_model: rx.Var[dict[str, Any]]
+    active_filter_fields: rx.Var[list[str]]
 
     # ---- column features ----
     column_visibility_model: rx.Var[dict[str, bool]]
