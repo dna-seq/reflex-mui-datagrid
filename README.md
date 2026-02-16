@@ -323,8 +323,7 @@ class MyState(LazyFrameGridMixin):
 | `lf` | `pl.LazyFrame` | *required* | The LazyFrame to browse |
 | `descriptions` | `dict[str, str] \| None` | `None` | Column descriptions for tooltips |
 | `chunk_size` | `int` | `200` | Rows per scroll chunk |
-| `value_options_sample_rows` | `int` | `20_000` | Rows to sample for dropdown filter options |
-| `value_options_max_unique` | `int` | `50` | Max unique values for dropdown detection |
+| `value_options_max_unique` | `int` | `500` | Max distinct values for dropdown filter (queried from full dataset) |
 
 ### `lazyframe_grid` -- Pre-Wired UI Component
 

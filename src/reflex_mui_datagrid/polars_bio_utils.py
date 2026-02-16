@@ -86,8 +86,7 @@ def bio_lazyframe_to_datagrid(
     id_field: str | None = None,
     show_id_field: bool = False,
     limit: int | None = None,
-    single_select_threshold: int = 20,
-    single_select_ratio: float = 0.5,
+    single_select_threshold: int = 500,
     column_descriptions: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[ColumnDef]]:
     """Convert a polars-bio LazyFrame into MUI DataGrid rows and column defs.
@@ -108,7 +107,8 @@ def bio_lazyframe_to_datagrid(
         show_id_field: Whether to include the row identifier as a visible column.
         limit: Optional maximum number of rows to collect.
         single_select_threshold: Max distinct values for auto singleSelect.
-        single_select_ratio: Max unique/row ratio for auto singleSelect.
+            MUI renders dropdowns as scrollable/searchable lists, so several
+            hundred values are perfectly usable.
         column_descriptions: Optional extra descriptions that override any
             automatically extracted ones.
 
@@ -126,6 +126,5 @@ def bio_lazyframe_to_datagrid(
         show_id_field=show_id_field,
         limit=limit,
         single_select_threshold=single_select_threshold,
-        single_select_ratio=single_select_ratio,
         column_descriptions=merged_descriptions,
     )

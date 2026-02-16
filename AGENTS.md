@@ -25,6 +25,13 @@ This project is uv based, it is a reflex wrapper for mui x-data-grid UI componen
 
 - **`pagination=False` for scrollable grids**: The `WrappedDataGrid` defaults to `pagination=True` and `auto_page_size=True`. You MUST explicitly pass `pagination=False` and `hide_footer=True` to get a continuously scrollable grid. Without this, rows are silently paginated and only the first page is visible.
 
+## LazyFrame Grid Requirements (CRITICAL)
+
+- **Truly lazy behavior**: `set_lazyframe` and all grid operations MUST be memory-safe. NEVER collect the entire LazyFrame. Every operation (row count, value options inference, page slicing) must use lazy queries that Polars can push down into the scan. If a full-dataset scan is unavoidable (e.g. counting rows on a format without metadata), it must be a streaming count — never materialise all rows into a DataFrame.
+- **No eager full-dataset scans at init**: The `_infer_value_options` function must NOT scan the entire dataset upfront. Value options for filter dropdowns should be computed lazily — either deferred until the user actually opens a filter, or sampled, or skipped for large datasets. The grid must be usable within seconds even on multi-million-row files.
+- **Always-visible filter buttons in column headers**: Every column header must have a clickable filter icon/button on the right side of the header text. Clicking it opens the filter panel for that column. These buttons must always be visible (not hidden behind a hover or menu). This is a core UX requirement — users must see at a glance that columns are filterable and be able to filter with one click.
+- **Memory safety**: The grid must never hold more rows in memory (in `lf_grid_rows`) than what has been scrolled to. Each scroll chunk appends only the new slice. Filter/sort resets must clear accumulated rows and start fresh from offset 0.
+
 ## Coding Standards
 
 - **Avoid nested try-catch**: try catch often just hide errors, put them only when errors is what we consider unavoidable in the use-case.

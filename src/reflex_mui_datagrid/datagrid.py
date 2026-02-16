@@ -278,10 +278,91 @@ function _buildGridProps(props, unlimitedMode) {
     alwaysShowFilterIcon,
     ...rest
   } = props;
+  // Widen columns so the header title is not hidden when MUI shows
+  // sort/filter/menu icons on hover.  The icons need ~66px of space
+  // (sort arrow ~20px + filter icon ~20px + menu dots ~26px).
+  // We bump each column's minWidth to ensure the title always has room.
+  const _ICON_SPACE = 66;
+  const widenedColumns = (Array.isArray(columns) ? columns : []).map((col) => {
+    const current = col.minWidth || 0;
+    const needed = (col.width || 100) + _ICON_SPACE;
+    return current >= needed ? col : { ...col, minWidth: Math.max(current, needed) };
+  });
   const enhancedColumns = _enhanceColumnsWithDescriptions(
-    columns, showDescriptionInHeader
+    widenedColumns, showDescriptionInHeader
   );
   const ep = { ...rest, columns: enhancedColumns };
+
+  // Fix icon ordering in column headers.
+  // MUI's columnHeaderTitleContainer is a flex row.  Its children vary:
+  //   - .MuiDataGrid-columnHeaderTitle (default) OR custom renderHeader output
+  //   - .MuiDataGrid-iconButtonContainer (sort arrow – only when column is sorted)
+  //   - our custom columnHeaderFilterIconButton slot (always visible)
+  // The sort icon appearing/disappearing causes the filter icon to shift.
+  //
+  // Fix: use CSS flexbox `order` to enforce a stable layout:
+  //   [title: order 0, flex-grow] [sort: order 1, fixed 28px] [filter: order 2, fixed 28px]
+  // The menu icon (.MuiDataGrid-menuIcon) is a sibling of titleContainer.
+  const headerIconSx = {
+    "& .MuiDataGrid-columnHeader": {
+      "& .MuiDataGrid-columnHeaderTitleContainer": {
+        display: "flex",
+        alignItems: "center",
+        flexWrap: "nowrap",
+        overflow: "hidden",
+      },
+      // Sort icon: fixed slot, always reserves 28px even when hidden
+      "& .MuiDataGrid-iconButtonContainer": {
+        order: 1,
+        display: "inline-flex",
+        boxSizing: "border-box",
+        width: 28,
+        minWidth: 28,
+        flexShrink: 0,
+        justifyContent: "center",
+        visibility: "visible",
+      },
+      // Filter icon (our always-visible slot): fixed 28px, rightmost in titleContainer
+      "& .MuiDataGrid-columnHeaderFilterIconButton": {
+        order: 2,
+        display: "inline-flex",
+        boxSizing: "border-box",
+        width: 28,
+        minWidth: 28,
+        flexShrink: 0,
+        justifyContent: "center",
+      },
+      // The title element (default or custom renderHeader): fills remaining space
+      "& .MuiDataGrid-columnHeaderTitle": {
+        order: 0,
+        flex: "1 1 auto",
+        minWidth: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      },
+      // When renderHeader is used, MUI wraps it in a div without the Title class.
+      // Target the first child of titleContainer that is NOT an icon container.
+      "& .MuiDataGrid-columnHeaderTitleContainer > :first-child:not(.MuiDataGrid-iconButtonContainer):not(.MuiDataGrid-columnHeaderFilterIconButton)": {
+        order: 0,
+        flex: "1 1 auto",
+        minWidth: 0,
+        overflow: "hidden",
+      },
+      // Menu icon (three dots on hover): sibling of titleContainer
+      "& .MuiDataGrid-menuIcon": {
+        width: 28,
+        minWidth: 28,
+        flexShrink: 0,
+        justifyContent: "center",
+      },
+    },
+  };
+  if (ep.sx) {
+    ep.sx = { ...headerIconSx, ...ep.sx };
+  } else {
+    ep.sx = headerIconSx;
+  }
+
   const shouldAlwaysShowFilterIcon =
     alwaysShowFilterIcon !== undefined
       ? !!alwaysShowFilterIcon

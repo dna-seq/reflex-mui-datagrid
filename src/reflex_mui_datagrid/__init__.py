@@ -14,6 +14,7 @@ from reflex_mui_datagrid.datagrid import DataGrid, DataGridNamespace, WrappedDat
 from reflex_mui_datagrid.lazyframe_grid import (
     LazyFrameGridMixin,
     lazyframe_grid,
+    lazyframe_grid_code_panel,
     lazyframe_grid_detail_box,
     lazyframe_grid_stats_bar,
     scan_file,
@@ -23,6 +24,7 @@ from reflex_mui_datagrid.polars_utils import (
     apply_filter_model,
     apply_sort_model,
     build_column_defs_from_schema,
+    generate_polars_code,
     lazyframe_to_datagrid,
     polars_dtype_to_grid_type,
     show_dataframe,

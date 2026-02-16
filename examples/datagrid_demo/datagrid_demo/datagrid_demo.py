@@ -27,6 +27,7 @@ from reflex_mui_datagrid import (
     data_grid,
     extract_vcf_descriptions,
     lazyframe_grid,
+    lazyframe_grid_code_panel,
     lazyframe_grid_detail_box,
     lazyframe_grid_stats_bar,
     lazyframe_to_datagrid,
@@ -472,6 +473,7 @@ def _genome_grid() -> rx.Component:
     return rx.fragment(
         lazyframe_grid_stats_bar(AppState),
         lazyframe_grid(AppState),
+        lazyframe_grid_code_panel(AppState),
     )
 
 

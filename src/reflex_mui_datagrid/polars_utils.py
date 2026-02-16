@@ -53,7 +53,6 @@ def _detect_single_select(
     df: pl.DataFrame,
     col_name: str,
     dtype: pl.DataType,
-    max_unique_ratio: float,
     max_unique_abs: int,
 ) -> list[str] | None:
     """Decide whether *col_name* should be rendered as ``singleSelect``.
@@ -63,8 +62,13 @@ def _detect_single_select(
 
     A column qualifies when:
     * Its dtype is ``Categorical`` or ``Enum``, **or**
-    * It is a string column whose number of distinct values is both
-      <= *max_unique_abs* **and** <= *max_unique_ratio* * row_count.
+    * It is a string column whose number of distinct values is
+      <= *max_unique_abs*.
+
+    MUI DataGrid renders ``singleSelect`` as a scrollable/searchable
+    dropdown, so several hundred values are perfectly usable.  Only
+    truly high-cardinality columns (free-form text, sequences, etc.)
+    should fall back to the text filter operators.
     """
     if _is_categorical_dtype(dtype):
         values = df[col_name].cast(pl.String).unique().drop_nulls().sort().to_list()
@@ -73,14 +77,11 @@ def _detect_single_select(
     if not isinstance(dtype, pl.String):
         return None
 
-    n_rows = df.height
-    if n_rows == 0:
+    if df.height == 0:
         return None
 
     unique_vals: list[str] = df[col_name].unique().drop_nulls().sort().to_list()
-    n_unique = len(unique_vals)
-
-    if n_unique <= max_unique_abs and n_unique / n_rows <= max_unique_ratio:
+    if len(unique_vals) <= max_unique_abs:
         return unique_vals
 
     return None
@@ -92,8 +93,7 @@ def lazyframe_to_datagrid(
     id_field: str | None = None,
     show_id_field: bool = False,
     limit: int | None = None,
-    single_select_threshold: int = 20,
-    single_select_ratio: float = 0.5,
+    single_select_threshold: int = 500,
     column_descriptions: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[ColumnDef]]:
     """Convert a polars LazyFrame into MUI DataGrid *rows* and *column_defs*.
@@ -108,10 +108,8 @@ def lazyframe_to_datagrid(
         single_select_threshold: String columns with at most this many distinct
             values are automatically turned into ``singleSelect`` columns with
             a dropdown filter.  Set to ``0`` to disable auto-detection.
-        single_select_ratio: Maximum ratio of unique values to row count for
-            a string column to qualify as ``singleSelect`` (e.g. 0.5 means
-            the column must have fewer than half as many unique values as
-            rows).
+            MUI renders dropdowns as scrollable/searchable lists, so several
+            hundred values are perfectly usable.
         column_descriptions: Optional mapping of column names to human-readable
             descriptions.  When provided, each matching column definition gets
             its ``description`` field set, which MUI DataGrid renders as a
@@ -163,7 +161,6 @@ def lazyframe_to_datagrid(
         if single_select_threshold > 0:
             value_options = _detect_single_select(
                 df, col_name, dtype,
-                max_unique_ratio=single_select_ratio,
                 max_unique_abs=single_select_threshold,
             )
         if value_options is not None:
@@ -477,6 +474,159 @@ def apply_sort_model(
     return lf.sort(by=by, descending=descending)
 
 
+# ---------------------------------------------------------------------------
+# Polars code generation from MUI filter/sort models
+# ---------------------------------------------------------------------------
+
+def _filter_item_to_code(
+    item: dict[str, Any],
+    schema: pl.Schema,
+) -> str | None:
+    """Translate a single MUI filter item to a Polars code snippet string."""
+    field: str | None = item.get("field")
+    operator: str | None = item.get("operator")
+    value: Any = item.get("value")
+
+    if field is None or operator is None:
+        return None
+    if field not in schema:
+        return None
+
+    col = f'pl.col("{field}")'
+    dtype = schema[field]
+    grid_type = polars_dtype_to_grid_type(dtype)
+
+    # Operators that don't need a value
+    if operator == "isEmpty":
+        return f'({col}.is_null() | ({col}.cast(pl.String) == ""))'
+    if operator == "isNotEmpty":
+        return f'({col}.is_not_null() & ({col}.cast(pl.String) != ""))'
+
+    if value is None:
+        return None
+
+    # singleSelect operators
+    if operator == "is":
+        return f'{col}.cast(pl.String) == "{value}"'
+    if operator == "not":
+        return f'{col}.cast(pl.String) != "{value}"'
+    if operator == "isAnyOf":
+        if not isinstance(value, list):
+            return None
+        vals_repr = repr([str(v) for v in value])
+        return f"{col}.cast(pl.String).is_in({vals_repr})"
+
+    # String operators
+    if grid_type == "string" or _is_categorical_dtype(dtype):
+        str_col = f'{col}.cast(pl.String)'
+        escaped = str(value).replace('"', '\\"')
+        if operator == "contains":
+            return f'{str_col}.str.contains("{escaped}", literal=True)'
+        if operator == "equals":
+            return f'{str_col} == "{escaped}"'
+        if operator == "startsWith":
+            return f'{str_col}.str.starts_with("{escaped}")'
+        if operator == "endsWith":
+            return f'{str_col}.str.ends_with("{escaped}")'
+        return None
+
+    # Numeric operators
+    if grid_type == "number":
+        num_value = _coerce_numeric(value)
+        if num_value is None:
+            return None
+        if operator in ("=", "equals"):
+            return f"{col} == {num_value}"
+        if operator in ("!=", "not"):
+            return f"{col} != {num_value}"
+        if operator in (">", ">=", "<", "<="):
+            return f"{col} {operator} {num_value}"
+        return None
+
+    return None
+
+
+def generate_polars_code(
+    filter_model: dict[str, Any] | None = None,
+    sort_model: list[dict[str, Any]] | None = None,
+    schema: pl.Schema | None = None,
+) -> str:
+    """Generate readable Polars Python code from MUI filter/sort models.
+
+    Returns a multi-line string that can be copy-pasted into a script.
+    The code assumes a variable ``lf`` (LazyFrame) already exists.
+
+    Args:
+        filter_model: MUI DataGrid filter model dict (may be ``None``
+            or empty).
+        sort_model: MUI DataGrid sort model list (may be ``None`` or
+            empty).
+        schema: The LazyFrame schema, used to determine column types
+            for generating correct filter expressions.
+
+    Returns:
+        A string of valid Python code, or an empty string if there are
+        no active filters or sorts.
+    """
+    lines: list[str] = []
+    lines.append("import polars as pl")
+    lines.append("")
+    lines.append("# Apply the filters and sorts you selected in the grid:")
+
+    has_filter = False
+    if filter_model and filter_model.get("items") and schema is not None:
+        items = filter_model["items"]
+        logic: str = filter_model.get("logicOperator", "and").lower()
+        code_parts: list[str] = []
+        for item in items:
+            code = _filter_item_to_code(item, schema)
+            if code is not None:
+                code_parts.append(code)
+
+        if code_parts:
+            has_filter = True
+            if len(code_parts) == 1:
+                lines.append(f"lf = lf.filter({code_parts[0]})")
+            else:
+                joiner = " | " if logic == "or" else " & "
+                combined = joiner.join(f"({p})" for p in code_parts)
+                lines.append(f"lf = lf.filter({combined})")
+
+    has_sort = False
+    if sort_model:
+        by_fields: list[str] = []
+        descending_flags: list[bool] = []
+        for entry in sort_model:
+            field = entry.get("field")
+            direction = entry.get("sort", "asc")
+            if field is None:
+                continue
+            by_fields.append(field)
+            descending_flags.append(direction == "desc")
+
+        if by_fields:
+            has_sort = True
+            if len(by_fields) == 1:
+                desc_str = "True" if descending_flags[0] else "False"
+                lines.append(
+                    f'lf = lf.sort("{by_fields[0]}", descending={desc_str})'
+                )
+            else:
+                by_repr = repr(by_fields)
+                desc_repr = repr(descending_flags)
+                lines.append(
+                    f"lf = lf.sort(by={by_repr}, descending={desc_repr})"
+                )
+
+    if not has_filter and not has_sort:
+        return ""
+
+    lines.append("")
+    lines.append("# Collect the result:")
+    lines.append("df = lf.collect()")
+    return "\n".join(lines)
+
+
 def _dataframe_to_dicts(df: pl.DataFrame) -> list[dict[str, Any]]:
     """Convert a DataFrame to a list of JSON-safe dicts.
 
@@ -530,8 +680,7 @@ def show_dataframe(
     id_field: str | None = None,
     show_id_field: bool = False,
     limit: int | None = None,
-    single_select_threshold: int = 20,
-    single_select_ratio: float = 0.5,
+    single_select_threshold: int = 500,
     column_descriptions: dict[str, str] | None = None,
     show_toolbar: bool = True,
     show_description_in_header: bool = False,
@@ -566,7 +715,6 @@ def show_dataframe(
         show_id_field: Whether to show the ID column in the grid.
         limit: Maximum number of rows to collect.
         single_select_threshold: Max distinct values for auto ``singleSelect``.
-        single_select_ratio: Max unique/row ratio for auto ``singleSelect``.
         column_descriptions: Optional ``{column: description}`` mapping.
         show_toolbar: Show the MUI toolbar (columns, filters, density, export).
         show_description_in_header: Show column descriptions as subtitles.
@@ -601,7 +749,6 @@ def show_dataframe(
         show_id_field=show_id_field,
         limit=limit,
         single_select_threshold=single_select_threshold,
-        single_select_ratio=single_select_ratio,
         column_descriptions=column_descriptions,
     )
 

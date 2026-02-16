@@ -152,7 +152,7 @@ col = ColumnDef(
 
 ## Polars Utilities
 
-### `lazyframe_to_datagrid(lf, *, id_field=None, show_id_field=False, limit=None, single_select_threshold=20, single_select_ratio=0.5)`
+### `lazyframe_to_datagrid(lf, *, id_field=None, show_id_field=False, limit=None, single_select_threshold=500)`
 
 Convert a polars `LazyFrame` to DataGrid-ready `(rows, column_defs)`.
 
@@ -172,8 +172,7 @@ rows, col_defs = lazyframe_to_datagrid(lf)
 | `id_field` | `str \| None` | `None` | Column to use as row ID. If `None` and no `"id"` column exists, a `__row_id__` column is auto-generated. |
 | `show_id_field` | `bool` | `False` | Whether to include the row identifier as a visible column in the grid. |
 | `limit` | `int \| None` | `None` | Max rows to collect (uses `.head(limit)`). |
-| `single_select_threshold` | `int` | `20` | String columns with at most this many unique values become `singleSelect`. Set to `0` to disable. |
-| `single_select_ratio` | `float` | `0.5` | Max ratio of unique values to total rows for `singleSelect` detection. |
+| `single_select_threshold` | `int` | `500` | String columns with at most this many unique values become `singleSelect` (dropdown filter). MUI renders dropdowns as scrollable/searchable lists, so several hundred values are perfectly usable. Set to `0` to disable. |
 
 **Automatic behavior:**
 
@@ -209,8 +208,7 @@ grid = show_dataframe(df, height="500px", density="compact")
 | `id_field` | `str \| None` | `None` | Column to use as row ID. |
 | `show_id_field` | `bool` | `False` | Whether to show the ID column. |
 | `limit` | `int \| None` | `None` | Max rows to collect. |
-| `single_select_threshold` | `int` | `20` | Max distinct values for auto `singleSelect`. |
-| `single_select_ratio` | `float` | `0.5` | Max unique/row ratio for `singleSelect`. |
+| `single_select_threshold` | `int` | `500` | Max distinct values for auto `singleSelect`. |
 | `column_descriptions` | `dict[str, str] \| None` | `None` | `{column: description}` for tooltips. |
 | `show_toolbar` | `bool` | `True` | Show MUI toolbar. |
 | `show_description_in_header` | `bool` | `False` | Show descriptions as subtitles. |
@@ -347,17 +345,18 @@ class MyState(LazyFrameGridMixin):
 | `lf_grid_selected_info` | `str` | `"Click a row to see details."` | Detail string for clicked row. |
 | `lf_grid_pagination_model` | `dict[str, int]` | `{"page": 0, "pageSize": 200}` | Current pagination state. |
 
-**`set_lazyframe(lf, descriptions, *, chunk_size, value_options_sample_rows, value_options_max_unique)`**
+**`set_lazyframe(lf, descriptions, *, chunk_size, value_options_max_unique)`**
 
 Prepare a LazyFrame for server-side browsing. This is a **generator** -- use `yield from self.set_lazyframe(...)` so the loading state is sent to the frontend immediately.
+
+Low-cardinality string columns get a `singleSelect` dropdown populated from the **full** dataset (not a sample), so every possible value is included and the user is never blocked. High-cardinality columns fall back to free-text filter operators (`contains`, `equals`, `startsWith`, etc.).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `lf` | `pl.LazyFrame` | *required* | The LazyFrame to browse. |
 | `descriptions` | `dict[str, str] \| None` | `None` | Column descriptions for tooltips/subtitles. |
 | `chunk_size` | `int` | `200` | Rows per scroll chunk. |
-| `value_options_sample_rows` | `int` | `20_000` | Rows to sample for dropdown filter options. |
-| `value_options_max_unique` | `int` | `50` | Max unique values for a column to get a dropdown filter. |
+| `value_options_max_unique` | `int` | `500` | Max distinct values for a column to get a dropdown filter. Queried from the full LazyFrame so the dropdown is always complete. |
 
 **Event handlers** (auto-wired by `lazyframe_grid`):
 
