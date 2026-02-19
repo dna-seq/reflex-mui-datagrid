@@ -1,9 +1,58 @@
 """Pydantic-style models for MUI X DataGrid column definitions and configuration."""
 
+import typing
 from typing import Any, Literal
 
 import reflex as rx
 from reflex.components.props import PropsBase
+
+
+class UrlCellRenderer(rx.Var):
+    """An ``rx.Var`` that renders a cell as a clickable ``<a>`` link.
+
+    Inherits from ``rx.Var`` so it can be passed directly to
+    ``ColumnDef.render_cell`` without any extra wrapping.
+
+    Args:
+        base_url: Optional URL prefix.  The cell value (``params.value``)
+            is appended to form the full href.  Leave empty when the cell
+            already contains the full URL.
+        label_field: Name of another column in the row to use as the visible
+            link text (accessed via ``params.row.<label_field>``).  When
+            ``None`` (default) the cell value itself is shown.
+        target: HTML ``target`` attribute for the anchor (default ``"_blank"``).
+        color: CSS ``color`` applied to the anchor element (default
+            ``"inherit"`` so the link blends with the row style).
+    """
+
+    def __new__(
+        cls,
+        base_url: str = "",
+        label_field: str | None = None,
+        target: str = "_blank",
+        color: str = "inherit",
+    ) -> "UrlCellRenderer":
+        href_expr = f"'{base_url}' + params.value" if base_url else "params.value"
+        label_expr = f"params.row.{label_field}" if label_field else "params.value"
+        js_expr = (
+            f"(params) => React.createElement('a', "
+            f"{{href: {href_expr}, target: '{target}', rel: 'noopener noreferrer', "
+            f"style: {{color: '{color}'}}}}, {label_expr})"
+        )
+        instance = object.__new__(cls)
+        object.__setattr__(instance, "_js_expr", js_expr)
+        object.__setattr__(instance, "_var_type", typing.Any)
+        object.__setattr__(instance, "_var_data", None)
+        return instance  # type: ignore[return-value]
+
+    def __init__(
+        self,
+        base_url: str = "",
+        label_field: str | None = None,
+        target: str = "_blank",
+        color: str = "inherit",
+    ) -> None:
+        pass  # all state set in __new__; frozen dataclass fields cannot be re-set
 
 
 class ColumnDef(PropsBase):

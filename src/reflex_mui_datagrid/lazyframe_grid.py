@@ -2,9 +2,14 @@
 
 This module provides a complete server-side scroll-loading DataGrid
 experience backed by a polars LazyFrame.  Users inherit from
-:class:`LazyFrameGridMixin` (which extends ``rx.State``), call
+:class:`LazyFrameGridMixin` **and** ``rx.State``, call
 :meth:`set_lazyframe` with any LazyFrame, and render with
 :func:`lazyframe_grid`.
+
+``LazyFrameGridMixin`` is a Reflex **state mixin** (``mixin=True``).
+Each subclass gets its own independent set of ``lf_grid_*`` reactive
+variables, so multiple grids on the same page do not interfere with
+each other.
 
 All operations are truly lazy -- the full dataset is **never**
 collected into memory.  Row counts use streaming counts, value
@@ -16,7 +21,7 @@ Typical usage::
 
     from reflex_mui_datagrid import LazyFrameGridMixin, lazyframe_grid, scan_file
 
-    class MyState(LazyFrameGridMixin):
+    class MyState(LazyFrameGridMixin, rx.State):
         def load_data(self):
             lf, descriptions = scan_file(Path("my_genome.vcf"))
             yield from self.set_lazyframe(lf, descriptions)
@@ -242,15 +247,28 @@ def _get_or_compute_value_options(
 # LazyFrameGridMixin
 # ---------------------------------------------------------------------------
 
-class LazyFrameGridMixin(rx.State):
+class LazyFrameGridMixin(rx.State, mixin=True):
     """Reflex State mixin for server-side scroll-loading DataGrids.
 
-    Inherit from this class to get a complete set of state variables
-    and event handlers for server-side filtering, sorting, and
-    infinite-scroll loading backed by a polars LazyFrame.
+    Inherit from this class **and** ``rx.State`` to get a complete set
+    of state variables and event handlers for server-side filtering,
+    sorting, and infinite-scroll loading backed by a polars LazyFrame.
 
-    This class extends ``rx.State`` so that Reflex's metaclass
-    properly registers all state vars as reactive variables.
+    This is a Reflex **mixin** (``mixin=True``).  The state vars
+    declared here are *not* registered on the mixin itself -- they are
+    injected into each concrete subclass by Reflex's metaclass.  This
+    means every subclass gets its own independent set of ``lf_grid_*``
+    reactive variables, so multiple grids on the same page do not
+    interfere with each other.
+
+    .. important::
+
+       Subclasses **must** also inherit from ``rx.State`` (or another
+       non-mixin state class) so that Reflex's metaclass registers the
+       vars on the child::
+
+           class MyGrid(LazyFrameGridMixin, rx.State):
+               ...
 
     All operations are truly lazy:
 
@@ -265,7 +283,7 @@ class LazyFrameGridMixin(rx.State):
 
     Example::
 
-        class MyState(LazyFrameGridMixin):
+        class MyState(LazyFrameGridMixin, rx.State):
             def load_data(self):
                 lf, descriptions = scan_file(Path("data.parquet"))
                 yield from self.set_lazyframe(lf, descriptions)
@@ -304,7 +322,6 @@ class LazyFrameGridMixin(rx.State):
         self,
         lf: pl.LazyFrame,
         descriptions: dict[str, str] | None = None,
-        *,
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
         value_options_max_unique: int = _DEFAULT_VALUE_OPTIONS_MAX_UNIQUE,
     ):

@@ -4,17 +4,29 @@ This project is uv based, it is a reflex wrapper for mui x-data-grid UI componen
 
 ## Reflex-Specific Patterns (CRITICAL)
 
-- **State var mixin classes MUST extend `rx.State`**: Reflex's metaclass only wraps class-level annotated attributes into reactive `rx.Var` objects for classes that inherit from `rx.State`. If you create a mixin with state vars as a plain Python class, those vars will remain raw Python defaults (e.g. `int`, `str`, `list`) when accessed on the subclass, and calls like `.to(str)` or reactive comparisons (`!= ""`) will fail at component build time. **Always** make state mixins inherit from `rx.State`:
+- **State var mixin classes MUST use `rx.State` with `mixin=True`**: Reflex provides a built-in mixin mechanism. Declare your mixin as `class MyMixin(rx.State, mixin=True)` so that the vars are **not** registered on the mixin itself but are injected into each concrete subclass by Reflex's metaclass. Each subclass then gets its own independent set of reactive vars. Subclasses **must** also inherit from `rx.State` (or another non-mixin state class) so the mixin flag is cleared and vars become reactive:
   ```python
-  # CORRECT — vars become reactive rx.Var objects
+  # CORRECT — mixin=True, each child gets independent vars
+  class MyMixin(rx.State, mixin=True):
+      my_count: int = 0
+
+  class GridA(MyMixin, rx.State):
+      ...
+  class GridB(MyMixin, rx.State):
+      ...
+  # GridA.my_count and GridB.my_count are INDEPENDENT rx.Var objects
+
+  # WRONG — without mixin=True, all children share the SAME vars
   class MyMixin(rx.State):
       my_count: int = 0
 
-  class AppState(MyMixin):
+  class GridA(MyMixin):
       ...
-  # AppState.my_count is an rx.Var, .to(str) works
+  class GridB(MyMixin):
+      ...
+  # GridA.my_count and GridB.my_count point to the SAME reactive var
 
-  # WRONG — vars stay as plain Python types
+  # ALSO WRONG — plain Python mixin without rx.State, vars stay as raw types
   class MyMixin:
       my_count: int = 0
 
@@ -22,6 +34,8 @@ This project is uv based, it is a reflex wrapper for mui x-data-grid UI componen
       ...
   # AppState.my_count is just int(0), .to(str) crashes
   ```
+
+- **No keyword-only arguments in mixin event handler methods**: Reflex's `BaseState._copy_fn` copies event handler methods from mixin classes to concrete subclasses using `FunctionType(..., argdefs=fn.__defaults__)`. This copies `__defaults__` (positional defaults) but **not** `__kwdefaults__` (keyword-only defaults). If a mixin method uses `*,` to define keyword-only arguments with defaults, those defaults are silently lost when the method is copied to the child class, causing `TypeError: missing required keyword-only arguments`. Always use regular positional arguments with defaults instead of keyword-only arguments in mixin methods that will be used as event handlers.
 
 - **`pagination=False` for scrollable grids**: The `WrappedDataGrid` defaults to `pagination=True` and `auto_page_size=True`. You MUST explicitly pass `pagination=False` and `hide_footer=True` to get a continuously scrollable grid. Without this, rows are silently paginated and only the first page is visible.
 

@@ -21,7 +21,7 @@ from reflex_mui_datagrid.lazyframe_grid import (
     merge_filter_model,
     scan_file,
 )
-from reflex_mui_datagrid.models import ColumnDef
+from reflex_mui_datagrid.models import ColumnDef, UrlCellRenderer
 from reflex_mui_datagrid.polars_utils import (
     apply_filter_model,
     apply_sort_model,

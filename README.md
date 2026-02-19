@@ -23,7 +23,7 @@ For genomic data support (VCF/BAM files), install with the `[bio]` extra:
 uv add "reflex-mui-datagrid[bio]"
 ```
 
-Requires Python >= 3.12, Reflex >= 0.8.26, and polars >= 1.0.
+Requires Python >= 3.12, Reflex >= 0.8.27, and polars >= 1.0.
 
 ## CLI VCF Viewer (No Boilerplate)
 
@@ -260,7 +260,7 @@ For datasets too large to load into the browser at once (millions of rows), the 
 from pathlib import Path
 from reflex_mui_datagrid import LazyFrameGridMixin, lazyframe_grid, scan_file
 
-class MyState(LazyFrameGridMixin):
+class MyState(LazyFrameGridMixin, rx.State):
     def load_data(self):
         lf, descriptions = scan_file(Path("my_genome.vcf"))
         yield from self.set_lazyframe(lf, descriptions)
@@ -292,10 +292,10 @@ lf, descriptions = scan_file(Path("data.parquet"))
 
 ### `LazyFrameGridMixin` -- State Mixin
 
-`LazyFrameGridMixin` extends `rx.State` and provides all the state variables and event handlers needed for server-side browsing. Inherit from it in your state class:
+`LazyFrameGridMixin` is a Reflex **state mixin** (`mixin=True`) that provides all the state variables and event handlers needed for server-side browsing. Inherit from it **and** `rx.State` in your state class -- each subclass gets its own independent set of `lf_grid_*` vars, so multiple grids on the same page do not interfere:
 
 ```python
-class MyState(LazyFrameGridMixin):
+class MyState(LazyFrameGridMixin, rx.State):
     # Your own state vars
     file_available: bool = False
 
@@ -354,6 +354,22 @@ def my_page() -> rx.Component:
 | `show_description_in_header` | `bool` | `True` | Show column descriptions as subtitles |
 | `debug_log` | `bool` | `True` | Browser console debug logging |
 | `on_row_click` | `EventHandler \| None` | `None` | Override default row-click handler |
+
+### Multiple Independent Grids
+
+Because `LazyFrameGridMixin` is a Reflex mixin (`mixin=True`), you can have multiple independent grids on the same page -- each subclass gets its own `lf_grid_*` state vars:
+
+```python
+class ParquetGrid(LazyFrameGridMixin, rx.State):
+    def load(self):
+        yield from self.set_lazyframe(pl.scan_parquet("data.parquet"))
+
+class CsvGrid(LazyFrameGridMixin, rx.State):
+    def load(self):
+        yield from self.set_lazyframe(pl.scan_csv("data.csv"))
+
+# ParquetGrid.lf_grid_rows and CsvGrid.lf_grid_rows are independent
+```
 
 ### How It Works
 

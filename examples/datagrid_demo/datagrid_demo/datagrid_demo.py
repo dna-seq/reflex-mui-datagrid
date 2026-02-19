@@ -104,7 +104,7 @@ def _build_employee_lazyframe() -> pl.LazyFrame:
 # Substates for server-side grids
 # ---------------------------------------------------------------------------
 
-class ParquetState(LazyFrameGridMixin):
+class ParquetState(LazyFrameGridMixin, rx.State):
     """Server-side lazy grid for the Longevity Map parquet dataset.
 
     Each ``LazyFrameGridMixin`` substate gets its own independent set
@@ -126,7 +126,7 @@ class ParquetState(LazyFrameGridMixin):
         self.pq_loading_init = False  # type: ignore[assignment]
 
 
-class GenomeState(LazyFrameGridMixin):
+class GenomeState(LazyFrameGridMixin, rx.State):
     """Server-side lazy grid for the full genome VCF (~4.5 M rows).
 
     Each ``LazyFrameGridMixin`` substate gets its own independent set

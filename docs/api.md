@@ -321,15 +321,33 @@ lf, descriptions = scan_file(Path("variants.vcf"))
 
 ### `LazyFrameGridMixin`
 
-Reflex State mixin (extends `rx.State`) for server-side scroll-loading DataGrids. Provides all state variables and event handlers needed for server-side filtering, sorting, and infinite-scroll loading.
+Reflex **state mixin** (`mixin=True`) for server-side scroll-loading DataGrids. Provides all state variables and event handlers needed for server-side filtering, sorting, and infinite-scroll loading.
+
+Because it is a mixin, each subclass gets its own **independent** set of `lf_grid_*` reactive variables. Multiple grids on the same page do not interfere with each other.
+
+Subclasses **must** also inherit from `rx.State` (or another non-mixin state class):
 
 ```python
 from reflex_mui_datagrid import LazyFrameGridMixin, scan_file
 
-class MyState(LazyFrameGridMixin):
+class MyState(LazyFrameGridMixin, rx.State):
     def load_data(self):
         lf, descriptions = scan_file(Path("data.parquet"))
         yield from self.set_lazyframe(lf, descriptions)
+```
+
+Multiple independent grids:
+
+```python
+class GridA(LazyFrameGridMixin, rx.State):
+    def load(self):
+        yield from self.set_lazyframe(lf_a)
+
+class GridB(LazyFrameGridMixin, rx.State):
+    def load(self):
+        yield from self.set_lazyframe(lf_b)
+
+# GridA.lf_grid_rows and GridB.lf_grid_rows are independent
 ```
 
 **State variables** (all prefixed `lf_grid_`):
@@ -345,7 +363,7 @@ class MyState(LazyFrameGridMixin):
 | `lf_grid_selected_info` | `str` | `"Click a row to see details."` | Detail string for clicked row. |
 | `lf_grid_pagination_model` | `dict[str, int]` | `{"page": 0, "pageSize": 200}` | Current pagination state. |
 
-**`set_lazyframe(lf, descriptions, *, chunk_size, value_options_max_unique)`**
+**`set_lazyframe(lf, descriptions, chunk_size, value_options_max_unique)`**
 
 Prepare a LazyFrame for server-side browsing. This is a **generator** -- use `yield from self.set_lazyframe(...)` so the loading state is sent to the frontend immediately.
 
@@ -435,7 +453,7 @@ src/reflex_mui_datagrid/
 - **`DataGrid(rx.Component)`** -- core wrapper for `@mui/x-data-grid`. Requires a parent container with explicit dimensions.
 - **`WrappedDataGrid(DataGrid)`** -- wraps `DataGrid` in a `<div>` with `width`/`height`. Defaults to `pagination=True` and `auto_page_size=True`; pass `pagination=False` for continuous scrolling.
 - **`DataGridNamespace(rx.ComponentNamespace)`** -- provides `data_grid(...)` callable and `data_grid.column_def`.
-- **`LazyFrameGridMixin(rx.State)`** -- state mixin with server-side scroll-loading, filtering, and sorting.
+- **`LazyFrameGridMixin(rx.State, mixin=True)`** -- state mixin with server-side scroll-loading, filtering, and sorting. Each subclass (which must also inherit `rx.State`) gets its own independent set of `lf_grid_*` vars.
 
 ### npm dependencies
 
