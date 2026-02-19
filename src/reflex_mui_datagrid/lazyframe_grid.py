@@ -300,6 +300,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
     lf_grid_selected_info: str = "Click a row to see details."
     lf_grid_filter_debug: str = "No active filters or sorts."
     lf_grid_filter_preset_json: str = ""
+    lf_grid_debug_expanded: bool = False
     lf_grid_filter_model: dict[str, Any] = {"items": []}
     lf_grid_active_filter_fields: list[str] = []
     lf_grid_pagination_model: dict[str, int] = {
@@ -409,6 +410,10 @@ class LazyFrameGridMixin(rx.State, mixin=True):
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
+
+    def toggle_lf_grid_debug(self) -> None:
+        """Toggle the debug panel expanded/collapsed state."""
+        self.lf_grid_debug_expanded = not self.lf_grid_debug_expanded  # type: ignore[assignment]
 
     def handle_lf_grid_filter(self, filter_model: dict[str, Any]):
         """Handle server-side filter change with multi-column accumulation.
@@ -663,16 +668,11 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         return merge_filter_model(self._lf_grid_filter or {}, incoming)
 
     def _update_filter_debug(self) -> None:
-        """Rebuild the human-readable filter/sort debug string and active filter fields."""
-        lines: list[str] = []
-
-        # Filters
+        """Rebuild the compact filter/sort summary and active filter fields."""
         items: list[dict[str, Any]] = []
         if self._lf_grid_filter and self._lf_grid_filter.get("items"):
             items = self._lf_grid_filter["items"]
 
-        # Update the list of field names with active filters (drives
-        # the highlighted filter icon in column headers).
         active_fields: list[str] = []
         for item in items:
             field = item.get("field")
@@ -680,32 +680,18 @@ class LazyFrameGridMixin(rx.State, mixin=True):
                 active_fields.append(field)
         self.lf_grid_active_filter_fields = active_fields  # type: ignore[assignment]
 
+        # Compact one-line summary instead of verbose multi-line detail.
+        parts: list[str] = []
         if items:
             logic = self._lf_grid_filter.get("logicOperator", "and").upper()
-            lines.append(f"FILTERS ({logic}):")
-            for i, item in enumerate(items):
-                field = item.get("field", "?")
-                op = item.get("operator", "?")
-                val = item.get("value")
-                val_str = repr(val) if val is not None else "(empty)"
-                lines.append(f"  {i + 1}. {field} {op} {val_str}")
-        else:
-            lines.append("FILTERS: none")
-
-        # Sorts
+            fields = ", ".join(active_fields) if len(active_fields) <= 3 else f"{len(active_fields)} columns"
+            parts.append(f"{len(items)} filter(s) ({logic}) on {fields}")
         if self._lf_grid_sort:
-            lines.append("SORTS:")
-            for i, entry in enumerate(self._lf_grid_sort):
-                field = entry.get("field", "?")
-                direction = entry.get("sort", "asc")
-                lines.append(f"  {i + 1}. {field} {direction}")
-        else:
-            lines.append("SORTS: none")
-
-        self.lf_grid_filter_debug = "\n".join(lines)  # type: ignore[assignment]
+            sort_fields = ", ".join(e.get("field", "?") for e in self._lf_grid_sort)
+            parts.append(f"{len(self._lf_grid_sort)} sort(s): {sort_fields}")
+        self.lf_grid_filter_debug = " | ".join(parts) if parts else "No active filters or sorts."  # type: ignore[assignment]
 
         # Build the filter JSON for download/display.
-        # Strip MUI-internal keys (like "id") -- only keep field/operator/value.
         clean_filter = self._lf_grid_filter or {}
         if clean_filter.get("items"):
             clean_filter = {
@@ -1046,15 +1032,11 @@ def lazyframe_grid_stats_bar(state_cls: type) -> rx.Component:
 
 
 def lazyframe_grid_filter_debug(state_cls: type) -> rx.Component:
-    """Return a debug panel showing active accumulated filters and sorts.
+    """Return a collapsible debug panel showing active filters and sorts.
 
-    Always visible (not hidden when empty).  Shows the current filter
-    items and sort entries in a human-readable format.  Includes a
-    "Clear All Filters" button and an "Upload Filters" button for
-    restoring saved filter JSON files.
-
-    Useful during development to verify which filters are actually
-    active on the server side.
+    The header bar is always visible and shows a compact one-line summary
+    plus Clear / Upload buttons.  Clicking the chevron expands the panel
+    to reveal the full Filter JSON (copy-pasteable / downloadable).
 
     Args:
         state_cls: The ``rx.State`` subclass that inherits from
@@ -1065,53 +1047,64 @@ def lazyframe_grid_filter_debug(state_cls: type) -> rx.Component:
     """
     upload_id = f"preset_upload_{state_cls.__name__}"
 
-    return rx.box(
-        rx.hstack(
-            rx.icon("bug", size=16, color="var(--orange-9)"),
-            rx.text(
-                "Filter / Sort Debug (server-side accumulated)",
-                size="2",
-                weight="bold",
-                color="var(--orange-11)",
+    header = rx.hstack(
+        rx.button(
+            rx.cond(
+                state_cls.lf_grid_debug_expanded,
+                rx.icon("chevron_down", size=14),
+                rx.icon("chevron_right", size=14),
             ),
-            rx.spacer(),
-            rx.upload(
-                rx.button(
-                    rx.icon("upload", size=14),
-                    "Upload Filters",
-                    size="1",
-                    variant="outline",
-                    color_scheme="blue",
-                ),
-                id=upload_id,
-                accept={".json": ["application/json"]},
-                max_files=1,
-                no_drag=True,
-                on_drop=state_cls.handle_lf_grid_preset_upload(  # type: ignore[attr-defined]
-                    rx.upload_files(upload_id=upload_id)
-                ),
-                padding="0",
-                border="none",
-            ),
+            size="1",
+            variant="ghost",
+            color_scheme="orange",
+            on_click=state_cls.toggle_lf_grid_debug,
+            padding="2px",
+        ),
+        rx.icon("bug", size=14, color="var(--orange-9)"),
+        rx.text(
+            state_cls.lf_grid_filter_debug,
+            size="1",
+            color="var(--orange-11)",
+            white_space="nowrap",
+            overflow="hidden",
+            text_overflow="ellipsis",
+            flex="1 1 auto",
+            min_width="0",
+        ),
+        rx.spacer(),
+        rx.upload(
             rx.button(
-                rx.icon("x", size=14),
-                "Clear All Filters",
+                rx.icon("upload", size=14),
+                "Upload",
                 size="1",
                 variant="outline",
-                color_scheme="orange",
-                on_click=state_cls.clear_lf_grid_filters,
+                color_scheme="blue",
             ),
-            align="center",
-            spacing="2",
-            width="100%",
+            id=upload_id,
+            accept={".json": ["application/json"]},
+            max_files=1,
+            no_drag=True,
+            on_drop=state_cls.handle_lf_grid_preset_upload(  # type: ignore[attr-defined]
+                rx.upload_files(upload_id=upload_id)
+            ),
+            padding="0",
+            border="none",
         ),
-        rx.code_block(
-            state_cls.lf_grid_filter_debug,
-            language="log",
-            show_line_numbers=False,
-            wrap_long_lines=True,
+        rx.button(
+            rx.icon("x", size=14),
+            "Clear All",
+            size="1",
+            variant="outline",
+            color_scheme="orange",
+            on_click=state_cls.clear_lf_grid_filters,
         ),
-        # Filter JSON -- always visible so users can copy-paste it directly.
+        align="center",
+        spacing="2",
+        width="100%",
+    )
+
+    expanded_content = rx.cond(
+        state_cls.lf_grid_debug_expanded,
         rx.cond(
             state_cls.lf_grid_filter_preset_json != "",
             rx.box(
@@ -1134,7 +1127,7 @@ def lazyframe_grid_filter_debug(state_cls: type) -> rx.Component:
                     ),
                     rx.button(
                         rx.icon("download", size=12),
-                        "Download Filters",
+                        "Download",
                         size="1",
                         variant="ghost",
                         color_scheme="orange",
@@ -1153,7 +1146,12 @@ def lazyframe_grid_filter_debug(state_cls: type) -> rx.Component:
                 margin_top="0.5em",
             ),
         ),
-        padding="0.8em",
+    )
+
+    return rx.box(
+        header,
+        expanded_content,
+        padding="0.5em 0.8em",
         border_radius="8px",
         background="var(--orange-a2)",
         border="1px solid var(--orange-a5)",
