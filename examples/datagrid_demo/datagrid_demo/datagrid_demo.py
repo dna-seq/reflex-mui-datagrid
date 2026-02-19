@@ -27,7 +27,6 @@ from reflex_mui_datagrid import (
     data_grid,
     extract_vcf_descriptions,
     lazyframe_grid,
-    lazyframe_grid_code_panel,
     lazyframe_grid_detail_box,
     lazyframe_grid_stats_bar,
     lazyframe_to_datagrid,
@@ -362,7 +361,6 @@ def parquet_tab() -> rx.Component:
             rx.fragment(
                 lazyframe_grid_stats_bar(ParquetState),
                 lazyframe_grid(ParquetState, height="540px", density="compact"),
-                lazyframe_grid_code_panel(ParquetState),
             ),
             # Not loaded yet -- show load button
             rx.box(
@@ -429,7 +427,6 @@ def _genome_grid() -> rx.Component:
     return rx.fragment(
         lazyframe_grid_stats_bar(GenomeState),
         lazyframe_grid(GenomeState),
-        lazyframe_grid_code_panel(GenomeState),
     )
 
 

@@ -78,7 +78,24 @@ if (_require) {
 // ---------------------------------------------------------------------------
 // Helper: inject renderHeader for columns that have a description and
 // showDescriptionInHeader is enabled on the grid.
+//
+// The ref callback walks up to the MUI-internal
+// columnHeaderTitleContainerContent wrapper and forces flex: 1 1 auto so
+// the title block fills remaining space and icons stay at the right edge.
 // ---------------------------------------------------------------------------
+function _forceParentFlex(el) {
+  if (!el) return;
+  const parent = el.parentElement;
+  if (
+    parent &&
+    parent.classList.contains("MuiDataGrid-columnHeaderTitleContainerContent")
+  ) {
+    parent.style.flex = "1 1 auto";
+    parent.style.minWidth = "0";
+    parent.style.overflow = "hidden";
+  }
+}
+
 function enhanceColumnsWithDescriptions(columns, showDescriptionInHeader) {
   if (!showDescriptionInHeader || !Array.isArray(columns)) return columns;
   return columns.map((col) => {
@@ -91,6 +108,7 @@ function enhanceColumnsWithDescriptions(columns, showDescriptionInHeader) {
         React.createElement(
           "div",
           {
+            ref: _forceParentFlex,
             style: {
               lineHeight: 1.2,
               overflow: "hidden",

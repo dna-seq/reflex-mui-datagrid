@@ -1,6 +1,6 @@
 [project]
 name = "datagrid-demo"
-version = "0.1.0"
+version = "0.1.1"
 description = "Example Reflex app demonstrating reflex-mui-datagrid with polars LazyFrame and VCF data"
 requires-python = ">=3.12"
 dependencies = [

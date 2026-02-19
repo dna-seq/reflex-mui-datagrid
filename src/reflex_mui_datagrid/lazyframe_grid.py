@@ -13,9 +13,9 @@ each other.
 
 All operations are truly lazy -- the full dataset is **never**
 collected into memory.  Row counts use streaming counts, value
-options for filter dropdowns are deferred (computed per-column on
-first filter interaction), and only small page slices are ever
-materialised.
+options for filter dropdowns use a hybrid strategy (eagerly
+computed at init for small datasets, on-demand for large ones),
+and only small page slices are ever materialised.
 
 Typical usage::
 
@@ -45,8 +45,6 @@ from reflex_mui_datagrid.polars_utils import (
     apply_filter_model,
     apply_sort_model,
     build_column_defs_from_schema,
-    generate_polars_code,
-    generate_sql_where,
 )
 
 
@@ -56,6 +54,7 @@ from reflex_mui_datagrid.polars_utils import (
 
 _DEFAULT_CHUNK_SIZE: int = 200
 _DEFAULT_VALUE_OPTIONS_MAX_UNIQUE: int = 500
+_DEFAULT_EAGER_VALUE_OPTIONS_ROW_LIMIT: int = 50_000
 
 
 class _LazyFrameCache:
@@ -274,8 +273,10 @@ class LazyFrameGridMixin(rx.State, mixin=True):
 
     * **Row count** is computed via a single ``select(pl.len())``
       pushed down into the scan engine (no full materialisation).
-    * **Value options** for filter dropdowns are computed per-column
-      on first filter interaction, not at init time.
+    * **Value options** for filter dropdowns use a hybrid strategy:
+      eagerly computed at init for small datasets (row count <=
+      ``eager_value_options_row_limit``), deferred and computed
+      on-demand (filter icon click) for large datasets.
     * **Page slices** collect only the requested chunk.
 
     All state variable names are prefixed with ``lf_grid_`` to avoid
@@ -297,9 +298,6 @@ class LazyFrameGridMixin(rx.State, mixin=True):
     lf_grid_loaded: bool = False
     lf_grid_stats: str = ""
     lf_grid_selected_info: str = "Click a row to see details."
-    lf_grid_query_code: str = ""
-    lf_grid_query_sql: str = ""
-    lf_grid_query_plan: str = ""
     lf_grid_filter_debug: str = "No active filters or sorts."
     lf_grid_filter_preset_json: str = ""
     lf_grid_filter_model: dict[str, Any] = {"items": []}
@@ -324,6 +322,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         descriptions: dict[str, str] | None = None,
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
         value_options_max_unique: int = _DEFAULT_VALUE_OPTIONS_MAX_UNIQUE,
+        eager_value_options_row_limit: int = _DEFAULT_EAGER_VALUE_OPTIONS_ROW_LIMIT,
     ):
         """Prepare a LazyFrame for server-side browsing.
 
@@ -334,9 +333,18 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         The LazyFrame is stored in a module-level cache (never serialised
         into Reflex state).  Only the schema and first page slice are
         computed at init time.  Row count is obtained via a lightweight
-        ``select(pl.len())`` query (pushed down by Polars).  Value
-        options for filter dropdowns are **deferred** -- computed
-        per-column on first filter interaction, not upfront.
+        ``select(pl.len())`` query (pushed down by Polars).
+
+        Value options for filter dropdowns use a **hybrid** strategy:
+
+        * For datasets with <= *eager_value_options_row_limit* rows,
+          value options are computed eagerly at init for all string-like
+          columns.  Each column is scanned independently (single-column
+          projection pushdown), so this is fast even for hundreds of
+          columns.
+        * For larger datasets, value options are **deferred** and
+          computed per-column on demand when the user clicks the filter
+          icon on a column header.
 
         Args:
             lf: The polars LazyFrame to browse.
@@ -344,8 +352,10 @@ class LazyFrameGridMixin(rx.State, mixin=True):
                 column header tooltips / subtitles.
             chunk_size: Number of rows to load per scroll chunk.
             value_options_max_unique: Maximum distinct values for a
-                column to get a dropdown filter.  Computed lazily
-                per-column on first filter use.
+                column to get a dropdown filter.
+            eager_value_options_row_limit: Row count threshold below
+                which value options are computed eagerly at init for all
+                string-like columns.  Set to ``0`` to always defer.
         """
         self.lf_grid_loading = True  # type: ignore[assignment]
         self.lf_grid_selected_info = "Preparing LazyFrame..."  # type: ignore[assignment]
@@ -365,8 +375,6 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         cache.schema = lf.collect_schema()
 
         # Build column defs from schema alone (no data scan).
-        # Value options are NOT computed here -- they are deferred
-        # to first filter interaction per column.
         col_defs = build_column_defs_from_schema(
             cache.schema,
             column_descriptions=cache.descriptions,
@@ -385,6 +393,14 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         }
         # Refresh first page and count rows (single lightweight query).
         self._refresh_lf_grid_page(append=False, refresh_row_count=True)
+
+        # Hybrid value options: eagerly compute for small datasets.
+        if (
+            eager_value_options_row_limit > 0
+            and self.lf_grid_row_count <= eager_value_options_row_limit
+        ):
+            self._compute_all_value_options()
+
         self.lf_grid_loading = False  # type: ignore[assignment]
         self.lf_grid_selected_info = (  # type: ignore[assignment]
             f"Ready: {self.lf_grid_row_count:,} rows. Scroll down to load more."
@@ -434,7 +450,6 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
         self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
         self._refresh_lf_grid_page(append=False, refresh_row_count=True)
-        self._regenerate_query_code()
         self._update_filter_debug()
         self.lf_grid_loading = False  # type: ignore[assignment]
 
@@ -452,7 +467,6 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
         self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
         self._refresh_lf_grid_page(append=False, refresh_row_count=True)
-        self._regenerate_query_code()
         self._update_filter_debug()
         self.lf_grid_loading = False  # type: ignore[assignment]
 
@@ -487,6 +501,38 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             f"+{page_size} rows, total={total_rows}, "
             f"elapsed={elapsed_ms:.1f}ms"
         )
+
+    def handle_lf_grid_request_value_options(self, field: str) -> None:
+        """Compute value options for a single column on demand.
+
+        Dispatched from the frontend when the user clicks the filter
+        icon on a column header.  If the column qualifies for a
+        ``singleSelect`` dropdown (low-cardinality string/categorical),
+        its column definition is upgraded in-place and pushed back to
+        the frontend so MUI renders the "is" dropdown immediately.
+        """
+        cache_id = self._lf_grid_cache_id
+        if not cache_id:
+            return
+        cache = _get_cache(cache_id)
+        if cache.lf is None or cache.schema is None:
+            return
+
+        resolved = _resolve_field_name(field, cache.schema) if cache.schema else field
+        if not resolved or resolved in cache._value_options_cache:
+            return  # already computed or invalid
+
+        options = _get_or_compute_value_options(cache, resolved)
+        if options is not None:
+            for i, col_def in enumerate(cache.col_defs):
+                if col_def.get("field") == resolved:
+                    cache.col_defs[i] = {
+                        **col_def,
+                        "type": "singleSelect",
+                        "valueOptions": options,
+                    }
+                    self.lf_grid_columns = cache.col_defs  # type: ignore[assignment]
+                    break
 
     def handle_lf_grid_row_click(self, params: dict[str, Any]) -> None:
         """Handle row click -- show all fields with descriptions."""
@@ -526,7 +572,6 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
         self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
         self._refresh_lf_grid_page(append=False, refresh_row_count=True)
-        self._regenerate_query_code()
         self._update_filter_debug()
         self.lf_grid_loading = False  # type: ignore[assignment]
 
@@ -536,8 +581,17 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         Returns an ``rx.download`` event that triggers a browser download
         of the filter state as ``filter_preset.json``.
         """
+        clean_filter = self._lf_grid_filter or {}
+        if clean_filter.get("items"):
+            clean_filter = {
+                **clean_filter,
+                "items": [
+                    {k: v for k, v in item.items() if k in ("field", "operator", "value")}
+                    for item in clean_filter["items"]
+                ],
+            }
         preset: dict[str, Any] = {
-            "filter_model": self._lf_grid_filter or {},
+            "filter_model": clean_filter,
             "sort_model": self._lf_grid_sort or [],
         }
         return rx.download(  # type: ignore[return-value]
@@ -588,7 +642,6 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
         self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
         self._refresh_lf_grid_page(append=False, refresh_row_count=True)
-        self._regenerate_query_code()
         self._update_filter_debug()
         self.lf_grid_loading = False  # type: ignore[assignment]
 
@@ -651,6 +704,26 @@ class LazyFrameGridMixin(rx.State, mixin=True):
 
         self.lf_grid_filter_debug = "\n".join(lines)  # type: ignore[assignment]
 
+        # Build the filter JSON for download/display.
+        # Strip MUI-internal keys (like "id") -- only keep field/operator/value.
+        clean_filter = self._lf_grid_filter or {}
+        if clean_filter.get("items"):
+            clean_filter = {
+                **clean_filter,
+                "items": [
+                    {k: v for k, v in item.items() if k in ("field", "operator", "value")}
+                    for item in clean_filter["items"]
+                ],
+            }
+        preset: dict[str, Any] = {
+            "filter_model": clean_filter,
+            "sort_model": self._lf_grid_sort or [],
+        }
+        has_content = bool(preset["filter_model"].get("items")) or bool(preset["sort_model"])
+        self.lf_grid_filter_preset_json = (  # type: ignore[assignment]
+            json.dumps(preset, indent=2, ensure_ascii=False) if has_content else ""
+        )
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -704,50 +777,53 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         if columns_updated:
             self.lf_grid_columns = cache.col_defs  # type: ignore[assignment]
 
-    def _regenerate_query_code(self) -> None:
-        """Regenerate the Polars code, SQL, query plan, and filter JSON from current state."""
+    def _compute_all_value_options(self) -> None:
+        """Eagerly compute value options for all string-like columns.
+
+        Called at init for small datasets (row count below
+        ``eager_value_options_row_limit``).  Each column is scanned
+        independently with projection pushdown, so only one column is
+        read at a time — the full dataset is never materialised.
+
+        Columns that qualify are upgraded to ``singleSelect`` with
+        ``valueOptions`` so the "is" dropdown is available immediately.
+        """
         cache_id = self._lf_grid_cache_id
         if not cache_id:
             return
         cache = _get_cache(cache_id)
-        schema = cache.schema
+        if cache.lf is None or cache.schema is None:
+            return
 
-        filter_model = self._lf_grid_filter or None
-        sort_model = self._lf_grid_sort or None
+        t0 = time.perf_counter()
+        columns_updated = False
 
-        self.lf_grid_query_code = generate_polars_code(  # type: ignore[assignment]
-            filter_model=filter_model,
-            sort_model=sort_model,
-            schema=schema,
+        for col_name, dtype in cache.schema.items():
+            if not isinstance(dtype, (pl.String, pl.Categorical, pl.Enum)):
+                continue
+            if col_name in cache._value_options_cache:
+                continue
+            options = _get_or_compute_value_options(cache, col_name)
+            if options is not None:
+                for i, col_def in enumerate(cache.col_defs):
+                    if col_def.get("field") == col_name:
+                        cache.col_defs[i] = {
+                            **col_def,
+                            "type": "singleSelect",
+                            "valueOptions": options,
+                        }
+                        columns_updated = True
+                        break
+
+        if columns_updated:
+            self.lf_grid_columns = cache.col_defs  # type: ignore[assignment]
+
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        n_computed = sum(1 for v in cache._value_options_cache.values() if v is not None)
+        print(
+            f"[LazyFrameGrid] eager value options: "
+            f"{n_computed} columns with dropdowns ({elapsed_ms:.1f}ms)"
         )
-
-        self.lf_grid_query_sql = generate_sql_where(  # type: ignore[assignment]
-            filter_model=filter_model,
-            sort_model=sort_model,
-            schema=schema,
-        )
-
-        # Build the filter JSON for download/display.
-        preset: dict[str, Any] = {
-            "filter_model": self._lf_grid_filter or {},
-            "sort_model": self._lf_grid_sort or [],
-        }
-        has_content = bool(preset["filter_model"].get("items")) or bool(preset["sort_model"])
-        self.lf_grid_filter_preset_json = (  # type: ignore[assignment]
-            json.dumps(preset, indent=2, ensure_ascii=False) if has_content else ""
-        )
-
-        # Build the actual filtered+sorted LazyFrame and capture its
-        # optimized query plan.
-        if cache.lf is not None:
-            lf = cache.lf
-            if self._lf_grid_filter and self._lf_grid_filter.get("items"):
-                lf = apply_filter_model(lf, self._lf_grid_filter, schema)
-            if self._lf_grid_sort:
-                lf = apply_sort_model(lf, self._lf_grid_sort, schema)
-            self.lf_grid_query_plan = lf.explain()  # type: ignore[assignment]
-        else:
-            self.lf_grid_query_plan = ""  # type: ignore[assignment]
 
     def _refresh_lf_grid_page(
         self,
@@ -904,6 +980,7 @@ def lazyframe_grid(
         on_rows_scroll_end=state_cls.handle_lf_grid_scroll_end,
         on_filter_model_change=state_cls.handle_lf_grid_filter,
         on_sort_model_change=state_cls.handle_lf_grid_sort,
+        on_request_value_options=state_cls.handle_lf_grid_request_value_options,
         on_row_click=on_row_click,
         height=height,
         width=width,
@@ -963,199 +1040,6 @@ def lazyframe_grid_stats_bar(state_cls: type) -> rx.Component:
             " rows (filtered)",
             size="2",
             color="var(--gray-9)",
-            margin_bottom="0.5em",
-        ),
-    )
-
-
-def lazyframe_grid_code_panel(state_cls: type) -> rx.Component:
-    """Return a panel showing generated code, SQL, query plan, and filter presets.
-
-    Displays four tabs:
-
-    * **Python Code** -- copy-pasteable Polars code reproducing the
-      current filter/sort.
-    * **SQL** -- copy-pasteable SQL WHERE clause for DuckDB/Postgres/etc.
-    * **Query Plan** -- the optimized Polars query plan that would
-      execute.
-    * **Filter JSON** -- the raw filter/sort model as JSON, downloadable
-      and re-uploadable to restore the same filters later.
-
-    All tabs have copy-to-clipboard and download buttons.  The Preset
-    tab also has an upload button to restore saved presets.
-
-    The panel is hidden when there are no active filters or sorts.
-
-    Args:
-        state_cls: The ``rx.State`` subclass that inherits from
-            :class:`LazyFrameGridMixin`.
-
-    Returns:
-        A Reflex component.
-    """
-    code_tab = rx.box(
-        rx.hstack(
-            rx.spacer(),
-            rx.button(
-                rx.icon("clipboard_copy", size=14),
-                "Copy",
-                size="1",
-                variant="ghost",
-                on_click=rx.set_clipboard(state_cls.lf_grid_query_code),  # type: ignore[arg-type]
-            ),
-            rx.button(
-                rx.icon("download", size=14),
-                "Download .py",
-                size="1",
-                variant="ghost",
-                on_click=rx.download(  # type: ignore[arg-type]
-                    data=state_cls.lf_grid_query_code,
-                    filename="polars_query.py",
-                ),
-            ),
-            align="center",
-            spacing="2",
-            width="100%",
-        ),
-        rx.code_block(
-            state_cls.lf_grid_query_code,
-            language="python",
-            show_line_numbers=True,
-            wrap_long_lines=True,
-        ),
-    )
-
-    sql_tab = rx.box(
-        rx.hstack(
-            rx.spacer(),
-            rx.button(
-                rx.icon("clipboard_copy", size=14),
-                "Copy",
-                size="1",
-                variant="ghost",
-                on_click=rx.set_clipboard(state_cls.lf_grid_query_sql),  # type: ignore[arg-type]
-            ),
-            rx.button(
-                rx.icon("download", size=14),
-                "Download .sql",
-                size="1",
-                variant="ghost",
-                on_click=rx.download(  # type: ignore[arg-type]
-                    data=state_cls.lf_grid_query_sql,
-                    filename="filter_query.sql",
-                ),
-            ),
-            align="center",
-            spacing="2",
-            width="100%",
-        ),
-        rx.code_block(
-            state_cls.lf_grid_query_sql,
-            language="sql",
-            show_line_numbers=True,
-            wrap_long_lines=True,
-        ),
-    )
-
-    plan_tab = rx.box(
-        rx.hstack(
-            rx.spacer(),
-            rx.button(
-                rx.icon("clipboard_copy", size=14),
-                "Copy",
-                size="1",
-                variant="ghost",
-                on_click=rx.set_clipboard(state_cls.lf_grid_query_plan),  # type: ignore[arg-type]
-            ),
-            rx.button(
-                rx.icon("download", size=14),
-                "Download .txt",
-                size="1",
-                variant="ghost",
-                on_click=rx.download(  # type: ignore[arg-type]
-                    data=state_cls.lf_grid_query_plan,
-                    filename="query_plan.txt",
-                ),
-            ),
-            align="center",
-            spacing="2",
-            width="100%",
-        ),
-        rx.code_block(
-            state_cls.lf_grid_query_plan,
-            language="log",
-            show_line_numbers=False,
-            wrap_long_lines=True,
-        ),
-    )
-
-    preset_tab = rx.box(
-        rx.hstack(
-            rx.spacer(),
-            rx.button(
-                rx.icon("clipboard_copy", size=14),
-                "Copy",
-                size="1",
-                variant="ghost",
-                on_click=rx.set_clipboard(state_cls.lf_grid_filter_preset_json),  # type: ignore[arg-type]
-            ),
-            rx.button(
-                rx.icon("download", size=14),
-                "Download Filters",
-                size="1",
-                variant="ghost",
-                on_click=state_cls.download_lf_grid_preset,
-            ),
-            align="center",
-            spacing="2",
-            width="100%",
-        ),
-        rx.code_block(
-            state_cls.lf_grid_filter_preset_json,
-            language="json",
-            show_line_numbers=True,
-            wrap_long_lines=True,
-        ),
-        rx.text(
-            "Save this filter JSON and upload it later to restore the same filters.",
-            size="1",
-            color="var(--gray-9)",
-            margin_top="0.3em",
-        ),
-    )
-
-    return rx.cond(
-        state_cls.lf_grid_query_code != "",
-        rx.box(
-            rx.hstack(
-                rx.icon("code_2", size=16, color="var(--blue-9)"),
-                rx.text(
-                    "Query / Preset",
-                    size="2",
-                    weight="bold",
-                    color="var(--blue-11)",
-                ),
-                align="center",
-                spacing="2",
-            ),
-            rx.tabs.root(
-                rx.tabs.list(
-                    rx.tabs.trigger("Python", value="code"),
-                    rx.tabs.trigger("SQL", value="sql"),
-                    rx.tabs.trigger("Query Plan", value="plan"),
-                    rx.tabs.trigger("Filter JSON", value="preset"),
-                ),
-                rx.tabs.content(code_tab, value="code"),
-                rx.tabs.content(sql_tab, value="sql"),
-                rx.tabs.content(plan_tab, value="plan"),
-                rx.tabs.content(preset_tab, value="preset"),
-                default_value="code",
-            ),
-            padding="0.8em",
-            border_radius="8px",
-            background="var(--gray-a2)",
-            border="1px solid var(--blue-a5)",
-            margin_top="0.5em",
             margin_bottom="0.5em",
         ),
     )

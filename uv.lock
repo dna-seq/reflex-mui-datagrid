@@ -116,7 +116,7 @@ wheels = [
 
 [[package]]
 name = "datagrid-demo"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "examples/datagrid_demo" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -842,7 +842,7 @@ wheels = [
 
 [[package]]
 name = "reflex-mui-datagrid"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "." }
 dependencies = [
     { name = "polars" },

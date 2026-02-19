@@ -87,6 +87,11 @@ def _on_rows_scroll_end_spec(event: rx.Var) -> list[rx.Var]:
     return [event]
 
 
+# -- Request value options for a column (field name string)
+def _on_request_value_options_spec(field: rx.Var) -> list[rx.Var]:
+    return [field]
+
+
 # ---------------------------------------------------------------------------
 # Inline JS wrapper – injected into compiled pages via add_custom_code().
 #
@@ -176,7 +181,23 @@ class _DataGridGuard extends React.Component {
 
 // ---------------------------------------------------------------------------
 // 3. Column-description header enhancer
+//
+// When a column has a `description`, renderHeader produces a two-line header
+// (bold name + smaller description).  The ref callback walks up to the
+// MUI-internal `columnHeaderTitleContainerContent` wrapper and forces
+// `flex: 1 1 auto` so the title block always fills remaining space and
+// pushes sort/filter icons to the right edge of the column.
 // ---------------------------------------------------------------------------
+function _forceParentFlex(el) {
+  if (!el) return;
+  const parent = el.parentElement;
+  if (parent && parent.classList.contains("MuiDataGrid-columnHeaderTitleContainerContent")) {
+    parent.style.flex = "1 1 auto";
+    parent.style.minWidth = "0";
+    parent.style.overflow = "hidden";
+  }
+}
+
 function _enhanceColumnsWithDescriptions(columns, showDescriptionInHeader) {
   if (!showDescriptionInHeader || !Array.isArray(columns)) return columns;
   return columns.map((col) => {
@@ -188,7 +209,7 @@ function _enhanceColumnsWithDescriptions(columns, showDescriptionInHeader) {
       renderHeader: () =>
         React.createElement(
           "div",
-          { style: { lineHeight: 1.2, overflow: "hidden", width: "100%" } },
+          { ref: _forceParentFlex, style: { lineHeight: 1.2, overflow: "hidden", width: "100%" } },
           React.createElement(
             "div",
             { style: { fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } },
@@ -343,6 +364,15 @@ const _AlwaysVisibleFilterIconButton = (props) => {
   const handleClick = React.useCallback((event) => {
     event.preventDefault();
     event.stopPropagation();
+    // Request value options from the server before opening the panel.
+    // The UnlimitedDataGrid wrapper listens for this event and calls
+    // the Python handler, which may upgrade the column to singleSelect.
+    const el = apiRef.current.rootElementRef?.current;
+    if (el) {
+      el.dispatchEvent(new CustomEvent("_requestValueOptions", {
+        detail: field, bubbles: true,
+      }));
+    }
     apiRef.current.showFilterPanel(field);
     if (typeof onClick === "function") {
       onClick(apiRef.current.getColumnHeaderParams(field), event);
@@ -397,6 +427,7 @@ function _buildGridProps(props, unlimitedMode) {
     debugLog,
     always_show_filter_icon,
     alwaysShowFilterIcon,
+    onRequestValueOptions,
     ...rest
   } = props;
   // Widen columns so the header title is not hidden when MUI shows
@@ -460,14 +491,6 @@ function _buildGridProps(props, unlimitedMode) {
         minWidth: 0,
         overflow: "hidden",
         textOverflow: "ellipsis",
-      },
-      // When renderHeader is used, MUI wraps it in a div without the Title class.
-      // Target the first child of titleContainer that is NOT an icon container.
-      "& .MuiDataGrid-columnHeaderTitleContainer > :first-child:not(.MuiDataGrid-iconButtonContainer):not(.MuiDataGrid-columnHeaderFilterIconButton)": {
-        order: 0,
-        flex: "1 1 auto",
-        minWidth: 0,
-        overflow: "hidden",
       },
       // Menu icon (three dots on hover): sibling of titleContainer
       "& .MuiDataGrid-menuIcon": {
@@ -622,6 +645,23 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     return () => container.removeEventListener("_applyFilter", handler);
   }, [isServerFilter, realOnFilterModelChange, log]);
 
+  // Listen for _requestValueOptions events from the filter icon button.
+  // Forwards the column field name to the Python handler so value options
+  // can be computed on demand (for large datasets where eager init is skipped).
+  const onRequestValueOptions = props.onRequestValueOptions;
+  React.useEffect(() => {
+    if (typeof onRequestValueOptions !== "function") return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handler = (e) => {
+      _dgLog(log, "request-value-options", e.detail);
+      onRequestValueOptions(e.detail);
+    };
+    container.addEventListener("_requestValueOptions", handler);
+    return () => container.removeEventListener("_requestValueOptions", handler);
+  }, [onRequestValueOptions, log]);
+
   const effectiveProps = _buildGridProps(props, _muiPatchActive);
 
   // In server filter mode:
@@ -651,9 +691,29 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     delete effectiveProps.onFilterModelChange;
     // Use the local filter model instead of the Python-controlled one.
     effectiveProps.filterModel = localFilterModel;
+
+    // Build a set of singleSelect field names for quick lookup.
+    const singleSelectFields = new Set(
+      (effectiveProps.columns || [])
+        .filter((c) => c.type === "singleSelect")
+        .map((c) => c.field)
+    );
+
     // Let MUI update the local state when the user edits in the panel.
+    // For singleSelect columns, default the operator to "is" when MUI
+    // creates a new filter item with an empty/missing operator.
     effectiveProps.onFilterModelChange = (model) => {
-      setLocalFilterModel(model);
+      if (singleSelectFields.size > 0 && model && Array.isArray(model.items)) {
+        const patched = model.items.map((item) => {
+          if (singleSelectFields.has(item.field) && !item.operator) {
+            return { ...item, operator: "is" };
+          }
+          return item;
+        });
+        setLocalFilterModel({ ...model, items: patched });
+      } else {
+        setLocalFilterModel(model);
+      }
     };
   }
 
@@ -817,6 +877,7 @@ class DataGrid(rx.Component):
     on_row_selection_model_change: rx.EventHandler[_on_row_selection_model_change_spec]
     on_column_visibility_model_change: rx.EventHandler[_on_column_visibility_model_change_spec]
     on_rows_scroll_end: rx.EventHandler[_on_rows_scroll_end_spec]
+    on_request_value_options: rx.EventHandler[_on_request_value_options_spec]
 
     @classmethod
     def create(
