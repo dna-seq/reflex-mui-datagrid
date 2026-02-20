@@ -579,8 +579,15 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     _dgLog(log, "rows updated", { count: rowsLength });
   }, [rowsLength, log]);
 
-  // Attach scroll listener to MUI virtual scroller and call onRowsScrollEnd
-  // once when the user reaches the near-bottom threshold.
+  // Attach scroll listener to MUI virtual scroller.
+  // IMPORTANT: rowsLength is intentionally excluded from the dependency
+  // array.  The listener does not need re-attaching when rows change —
+  // the unlock effect above releases the lock, and the next user-driven
+  // scroll event will trigger loading.  Including rowsLength caused an
+  // infinite loop: each row append re-ran this effect, which called
+  // onScroll() immediately before MUI updated the virtual scroller's
+  // dimensions, making `remaining` appear small and firing scroll-end
+  // again (row append → effect re-run → onScroll → fire → row append …).
   React.useEffect(() => {
     if (typeof onRowsScrollEnd !== "function") return;
     const container = containerRef.current;
@@ -621,9 +628,14 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     };
 
     scroller.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => scroller.removeEventListener("scroll", onScroll);
-  }, [onRowsScrollEnd, scrollEndThreshold, rowsLength, log]);
+    // Defer the initial position check to after the browser has painted,
+    // ensuring MUI's virtual scroller dimensions are up to date.
+    const rafId = requestAnimationFrame(() => onScroll());
+    return () => {
+      cancelAnimationFrame(rafId);
+      scroller.removeEventListener("scroll", onScroll);
+    };
+  }, [onRowsScrollEnd, scrollEndThreshold, log]);
 
   // When filterMode="server" and the custom filter panel is active,
   // listen for the _applyFilter custom event dispatched by the Apply

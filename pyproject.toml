@@ -1,6 +1,6 @@
 [project]
 name = "reflex-mui-datagrid"
-version = "0.1.9"
+version = "0.1.10"
 description = "Reflex wrapper for the MUI X DataGrid (v8) React component with polars LazyFrame support"
 readme = "README.md"
 authors = [
