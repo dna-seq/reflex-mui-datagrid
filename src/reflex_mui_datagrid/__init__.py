@@ -10,7 +10,12 @@ VCF/BAM column descriptions from file headers)::
     pip install reflex-mui-datagrid[bio]
 """
 
-from reflex_mui_datagrid.datagrid import DataGrid, DataGridNamespace, WrappedDataGrid, data_grid
+from reflex_mui_datagrid.datagrid import (
+    DataGrid,
+    DataGridNamespace,
+    WrappedDataGrid,
+    data_grid,
+)
 from reflex_mui_datagrid.lazyframe_grid import (
     LazyFrameGridMixin,
     lazyframe_grid,
@@ -20,7 +25,12 @@ from reflex_mui_datagrid.lazyframe_grid import (
     merge_filter_model,
     scan_file,
 )
-from reflex_mui_datagrid.models import ColumnDef, UrlCellRenderer
+from reflex_mui_datagrid.models import (
+    ColumnDef,
+    UrlCellRenderer,
+    BadgeCellRenderer,
+    ProgressBarCellRenderer,
+)
 from reflex_mui_datagrid.polars_utils import (
     apply_filter_model,
     apply_sort_model,

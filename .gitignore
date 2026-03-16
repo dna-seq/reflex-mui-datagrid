@@ -208,3 +208,7 @@ examples/datagrid_demo/datagrid_demo/data/antonkulaga.vcf
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Cusor stuff
+.cursor/
+.cursor/

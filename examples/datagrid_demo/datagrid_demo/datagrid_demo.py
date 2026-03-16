@@ -53,12 +53,55 @@ GENOME_PATH: Path = Path(__file__).parent / "data" / "antonkulaga.vcf"
 # Parquet (HuggingFace) constants
 # ---------------------------------------------------------------------------
 
-PARQUET_HF_URL: str = "hf://datasets/just-dna-seq/annotators/data/longevitymap/weights.parquet"
+PARQUET_HF_URL: str = (
+    "hf://datasets/just-dna-seq/annotators/data/longevitymap/weights.parquet"
+)
 
 
 # ---------------------------------------------------------------------------
 # Sample data builders
 # ---------------------------------------------------------------------------
+
+
+def _build_prs_lazyframe() -> pl.LazyFrame:
+    import random
+
+    random.seed(42)
+    traits = [
+        "Breast cancer",
+        "Prostate cancer",
+        "Parkinson's disease",
+        "Rheumatoid arthritis",
+        "Systolic blood pressure",
+        "Stroke",
+        "Type 1 diabetes",
+        "Hypertension",
+        "Coronary artery disease",
+    ]
+    methods = ["theoretical", "1000G ref"]
+    qualities = ["Low", "Moderate", "High"]
+
+    data = []
+    for i in range(100):
+        data.append(
+            {
+                "PGS ID": f"PGS{i:06d}",
+                "Trait": random.choice(traits),
+                "PRS Score": round(random.uniform(-5.0, 5.0), 4),
+                "Percentile": round(random.uniform(0, 100), 1),
+                "AFR": round(random.choice([0.0, 100.0]), 1),
+                "AMR": round(random.choice([0.0, 100.0]), 1),
+                "EAS": round(random.choice([0.0, 100.0]), 1),
+                "EUR": round(random.choice([0.0, 100.0]), 1),
+                "SAS": round(random.choice([0.0, 100.0]), 1),
+                "Pct. Method": random.choice(methods),
+                "AUROC": round(random.uniform(0.5, 0.9), 3),
+                "Quality": random.choice(qualities),
+                "Match Rate": round(random.uniform(20.0, 80.0), 1),
+            }
+        )
+    return pl.LazyFrame(data)
+
 
 def _build_employee_lazyframe() -> pl.LazyFrame:
     """Create a sample LazyFrame with employee data."""
@@ -66,34 +109,114 @@ def _build_employee_lazyframe() -> pl.LazyFrame:
         {
             "id": list(range(1, 21)),
             "first_name": [
-                "Alice", "Bob", "Charlie", "Diana", "Eve",
-                "Frank", "Grace", "Hank", "Ivy", "Jack",
-                "Karen", "Leo", "Mona", "Nick", "Olivia",
-                "Paul", "Quinn", "Rita", "Sam", "Tina",
+                "Alice",
+                "Bob",
+                "Charlie",
+                "Diana",
+                "Eve",
+                "Frank",
+                "Grace",
+                "Hank",
+                "Ivy",
+                "Jack",
+                "Karen",
+                "Leo",
+                "Mona",
+                "Nick",
+                "Olivia",
+                "Paul",
+                "Quinn",
+                "Rita",
+                "Sam",
+                "Tina",
             ],
             "last_name": [
-                "Smith", "Johnson", "Williams", "Brown", "Jones",
-                "Garcia", "Miller", "Davis", "Rodriguez", "Martinez",
-                "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson",
-                "Thomas", "Taylor", "Moore", "Jackson", "Martin",
+                "Smith",
+                "Johnson",
+                "Williams",
+                "Brown",
+                "Jones",
+                "Garcia",
+                "Miller",
+                "Davis",
+                "Rodriguez",
+                "Martinez",
+                "Hernandez",
+                "Lopez",
+                "Gonzalez",
+                "Wilson",
+                "Anderson",
+                "Thomas",
+                "Taylor",
+                "Moore",
+                "Jackson",
+                "Martin",
             ],
             "department": [
-                "Engineering", "Marketing", "Engineering", "Sales", "Engineering",
-                "Marketing", "Sales", "Engineering", "Marketing", "Sales",
-                "Engineering", "Marketing", "Sales", "Engineering", "Marketing",
-                "Sales", "Engineering", "Marketing", "Sales", "Engineering",
+                "Engineering",
+                "Marketing",
+                "Engineering",
+                "Sales",
+                "Engineering",
+                "Marketing",
+                "Sales",
+                "Engineering",
+                "Marketing",
+                "Sales",
+                "Engineering",
+                "Marketing",
+                "Sales",
+                "Engineering",
+                "Marketing",
+                "Sales",
+                "Engineering",
+                "Marketing",
+                "Sales",
+                "Engineering",
             ],
             "salary": [
-                95000, 72000, 110000, 68000, 125000,
-                71000, 82000, 98000, 67000, 78000,
-                105000, 69000, 74000, 115000, 73000,
-                80000, 99000, 70000, 76000, 108000,
+                95000,
+                72000,
+                110000,
+                68000,
+                125000,
+                71000,
+                82000,
+                98000,
+                67000,
+                78000,
+                105000,
+                69000,
+                74000,
+                115000,
+                73000,
+                80000,
+                99000,
+                70000,
+                76000,
+                108000,
             ],
             "active": [
-                True, True, True, False, True,
-                True, False, True, True, True,
-                True, False, True, True, True,
-                False, True, True, False, True,
+                True,
+                True,
+                True,
+                False,
+                True,
+                True,
+                False,
+                True,
+                True,
+                True,
+                True,
+                False,
+                True,
+                True,
+                True,
+                False,
+                True,
+                True,
+                False,
+                True,
             ],
         }
     )
@@ -102,6 +225,7 @@ def _build_employee_lazyframe() -> pl.LazyFrame:
 # ---------------------------------------------------------------------------
 # Substates for server-side grids
 # ---------------------------------------------------------------------------
+
 
 class ParquetState(LazyFrameGridMixin, rx.State):
     """Server-side lazy grid for the Longevity Map parquet dataset.
@@ -142,8 +266,7 @@ class GenomeState(LazyFrameGridMixin, rx.State):
         """Scan the genome VCF and prepare for lazy browsing."""
         if not GENOME_PATH.exists():
             self.lf_grid_selected_info = (  # type: ignore[assignment]
-                "Genome file not found. "
-                "Run: uv run demo download-genome"
+                "Genome file not found. Run: uv run demo download-genome"
             )
             return
 
@@ -155,12 +278,19 @@ class GenomeState(LazyFrameGridMixin, rx.State):
 # Main app state (client-side grids only)
 # ---------------------------------------------------------------------------
 
+
 class AppState(rx.State):
     """Application state holding data for the small client-side tabs.
 
     The Parquet and Genome tabs use their own ``LazyFrameGridMixin``
     substates (``ParquetState`` and ``GenomeState``).
     """
+
+    # PRS tab
+    prs_rows: list[dict[str, Any]] = []
+    prs_columns: list[dict[str, Any]] = []
+    prs_selected: str = "Click a row to see its details."
+    prs_row_count: int = 0
 
     # Employee tab
     emp_rows: list[dict[str, Any]] = []
@@ -181,6 +311,60 @@ class AppState(rx.State):
         """Load the small client-side datasets on page load."""
         self._load_employees()
         self._load_vcf()
+        self._load_prs()
+
+    def _load_prs(self) -> None:
+        lf = _build_prs_lazyframe()
+        rows, col_defs = lazyframe_to_datagrid(lf)
+
+        population_colors: dict[str, tuple[str, str]] = {
+            "AFR": ("#f57f17", "#fff9c4"),
+            "AMR": ("#d81b60", "#f8bbd0"),
+            "EAS": ("#388e3c", "#c8e6c9"),
+            "EUR": ("#1976d2", "#bbdefb"),
+            "SAS": ("#8e24aa", "#e1bee7"),
+        }
+
+        for col in col_defs:
+            if col.field == "Percentile":
+                col.cell_renderer_type = "progress_bar"
+                col.cell_renderer_config = {
+                    "color": "#1976d2",
+                    "trackColor": "#e0e0e0",
+                    "showValue": True,
+                }
+            elif col.field in population_colors:
+                c, bg = population_colors[col.field]
+                col.cell_renderer_type = "badge"
+                col.cell_renderer_config = {"color": c, "bgColor": bg}
+            elif col.field == "Pct. Method":
+                col.cell_renderer_type = "badge"
+                col.cell_renderer_config = {"color": "#1976d2", "bgColor": "#e3f2fd"}
+            elif col.field == "Quality":
+                col.cell_renderer_type = "badge"
+                col.cell_renderer_config = {
+                    "colorMap": {
+                        "High": "#2e7d32",
+                        "Moderate": "#f57f17",
+                        "Low": "#c62828",
+                    },
+                    "bgColorMap": {
+                        "High": "#e8f5e9",
+                        "Moderate": "#fff3e0",
+                        "Low": "#ffebee",
+                    },
+                }
+            elif col.field == "Match Rate":
+                col.cell_renderer_type = "progress_bar"
+                col.cell_renderer_config = {
+                    "color": "#43a047",
+                    "trackColor": "#e8e8e8",
+                    "showValue": True,
+                }
+
+        self.prs_rows = rows
+        self.prs_columns = [c.dict() for c in col_defs]
+        self.prs_row_count = len(rows)
 
     def _load_employees(self) -> None:
         lf = _build_employee_lazyframe()
@@ -198,6 +382,13 @@ class AppState(rx.State):
     # ------------------------------------------------------------------
     # Employee handlers
     # ------------------------------------------------------------------
+
+    def handle_prs_row_click(self, params: dict[str, Any]) -> None:
+        row = params.get("row", {})
+        if row:
+            pgs = row.get("PGS ID", "")
+            trait = row.get("Trait", "")
+            self.prs_selected = f"Selected row: {pgs} - {trait}"
 
     def handle_emp_row_click(self, params: dict[str, Any]) -> None:
         """Handle employee row click."""
@@ -238,6 +429,7 @@ class AppState(rx.State):
 # UI components
 # ---------------------------------------------------------------------------
 
+
 def _status_box(*children: rx.Component) -> rx.Component:
     """Styled status box below a grid."""
     return rx.box(
@@ -246,6 +438,43 @@ def _status_box(*children: rx.Component) -> rx.Component:
         padding="1em",
         border_radius="8px",
         background="var(--gray-a3)",
+    )
+
+
+def prs_tab() -> rx.Component:
+    """PRS Results tab content."""
+    return rx.box(
+        rx.text(
+            "A mock PRS Results dataset demonstrating cell_renderer_type / "
+            "cell_renderer_config on ColumnDef for colored badges and progress bars.",
+            margin_bottom="1em",
+            color="var(--gray-11)",
+        ),
+        rx.cond(
+            AppState.prs_rows.length() > 0,
+            data_grid(
+                rows=AppState.prs_rows,
+                columns=AppState.prs_columns,
+                row_id_field="PGS ID",
+                pagination=False,
+                hide_footer=True,
+                checkbox_selection=True,
+                disable_row_selection_on_click=True,
+                on_row_click=AppState.handle_prs_row_click,
+            ),
+            rx.text("Loading data...", color="var(--gray-9)", font_style="italic"),
+        ),
+        rx.box(
+            rx.text(AppState.prs_selected, weight="bold"),
+            margin_top="1em",
+            padding="1em",
+            border_radius="8px",
+            background="var(--gray-3)",
+        ),
+        height="800px",
+        display="flex",
+        flex_direction="column",
+        gap="1em",
     )
 
 
@@ -466,11 +695,13 @@ def index() -> rx.Component:
         rx.heading("MUI X DataGrid -- Reflex Demo", size="6", margin_bottom="1em"),
         rx.tabs.root(
             rx.tabs.list(
+                rx.tabs.trigger("PRS Results", value="prs"),
                 rx.tabs.trigger("Employee Data", value="employees"),
                 rx.tabs.trigger("Genomic Variants (VCF)", value="vcf"),
                 rx.tabs.trigger("Longevity Map (Parquet)", value="parquet"),
                 rx.tabs.trigger("Full Genome (Server-Side)", value="genome"),
             ),
+            rx.tabs.content(prs_tab(), value="prs"),
             rx.tabs.content(employee_tab(), value="employees"),
             rx.tabs.content(vcf_tab(), value="vcf"),
             rx.tabs.content(parquet_tab(), value="parquet"),

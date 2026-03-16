@@ -73,7 +73,9 @@ def extract_vcf_descriptions(lf: pl.LazyFrame) -> dict[str, str]:
 
     # FILTER descriptions (useful for display, keyed by filter ID)
     filters: list[dict[str, str]] = header.get("filters", [])
-    filter_descs = [f"{f['id']}: {f['description']}" for f in filters if f.get("description")]
+    filter_descs = [
+        f"{f['id']}: {f['description']}" for f in filters if f.get("description")
+    ]
     if filter_descs:
         descriptions["filter"] = "Filter status. " + "; ".join(filter_descs)
 

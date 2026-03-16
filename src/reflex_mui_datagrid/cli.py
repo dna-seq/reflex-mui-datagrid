@@ -59,7 +59,9 @@ def _detect_format(path: Path) -> str:
         ".fq": "fastq",
     }
     # Check two-part extensions first (e.g. .vcf.gz)
-    double_suffix = "".join(path.suffixes[-2:]).lower() if len(path.suffixes) >= 2 else ""
+    double_suffix = (
+        "".join(path.suffixes[-2:]).lower() if len(path.suffixes) >= 2 else ""
+    )
     if double_suffix in format_map:
         return format_map[double_suffix]
     return format_map.get(suffix, "csv")
@@ -149,11 +151,25 @@ app.add_page(index, on_load=ViewerState.load_data)
 
 @app.command()
 def view(
-    file: Annotated[Path, typer.Argument(help="Path to the data file (VCF, CSV, TSV, Parquet, JSON, etc.)")],
-    limit: Annotated[Optional[int], typer.Option("--limit", "-n", help="Maximum number of rows to load")] = None,
-    height: Annotated[str, typer.Option("--height", "-h", help="CSS height of the grid")] = "calc(100vh - 200px)",
-    port: Annotated[int, typer.Option("--port", "-p", help="Port for the Reflex frontend")] = 3000,
-    title: Annotated[Optional[str], typer.Option("--title", "-t", help="Page title")] = None,
+    file: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to the data file (VCF, CSV, TSV, Parquet, JSON, etc.)"
+        ),
+    ],
+    limit: Annotated[
+        Optional[int],
+        typer.Option("--limit", "-n", help="Maximum number of rows to load"),
+    ] = None,
+    height: Annotated[
+        str, typer.Option("--height", "-h", help="CSS height of the grid")
+    ] = "calc(100vh - 200px)",
+    port: Annotated[
+        int, typer.Option("--port", "-p", help="Port for the Reflex frontend")
+    ] = 3000,
+    title: Annotated[
+        Optional[str], typer.Option("--title", "-t", help="Page title")
+    ] = None,
 ) -> None:
     """View a data file in an interactive browser grid.
 
@@ -175,7 +191,7 @@ def view(
         except ImportError:
             typer.echo(
                 f"Error: viewing {fmt.upper()} files requires the [bio] extra.\n"
-                f"Install it with: uv add \"reflex-mui-datagrid[bio]\"",
+                f'Install it with: uv add "reflex-mui-datagrid[bio]"',
                 err=True,
             )
             raise typer.Exit(code=1)

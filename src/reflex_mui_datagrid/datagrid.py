@@ -28,6 +28,7 @@ from reflex_mui_datagrid.models import ColumnDef
 # column objects, DOM nodes, etc.). The helpers below create small arrow-function
 # wrappers that strip those keys before the value is sent to the Python backend.
 
+
 def _js_strip_keys(event_var: str, exclude_keys: list[str]) -> str:
     """Return JS expression that destructures *exclude_keys* away from *event_var*."""
     keys = ", ".join(exclude_keys)
@@ -256,22 +257,23 @@ const _dgLog = (() => {
 const _FilterPanelWithApply = React.forwardRef((props, ref) => {
   const apiRef = useGridApiContext_();
 
-  // Apply: send the current grid filter model to the server.
+  // Apply: send the current grid filter model to the server and close the panel.
   const handleApply = React.useCallback(() => {
     const currentModel = apiRef.current.state.filter.filterModel;
-    // Dispatch a custom event that the UnlimitedDataGrid wrapper listens for.
     const event = new CustomEvent("_applyFilter", { detail: currentModel, bubbles: true });
     const el = apiRef.current.rootElementRef?.current;
     if (el) el.dispatchEvent(event);
+    apiRef.current.hideFilterPanel();
   }, [apiRef]);
 
-  // Reset: clear all filters and notify the server.
+  // Reset: clear all filters, notify the server, and close the panel.
   const handleReset = React.useCallback(() => {
     const emptyModel = { items: [] };
     apiRef.current.setFilterModel(emptyModel);
     const event = new CustomEvent("_applyFilter", { detail: emptyModel, bubbles: true });
     const el = apiRef.current.rootElementRef?.current;
     if (el) el.dispatchEvent(event);
+    apiRef.current.hideFilterPanel();
   }, [apiRef]);
 
   // Apply on Enter key press anywhere in the panel.
@@ -440,8 +442,82 @@ function _buildGridProps(props, unlimitedMode) {
     const needed = (col.width || 100) + _ICON_SPACE;
     return current >= needed ? col : { ...col, minWidth: Math.max(current, needed) };
   });
+
+  const renderedColumns = widenedColumns.map((col) => {
+    if (col.renderCell || !col.cellRendererType) return col;
+    const cfg = col.cellRendererConfig || {};
+    const { cellRendererType, cellRendererConfig, ...colRest } = col;
+    if (cellRendererType === "badge") {
+      colRest.renderCell = (params) => {
+        const val = params.value;
+        const formattedVal = params.formattedValue || val;
+        if (val == null) return "";
+        let c = cfg.color || "";
+        let bg = cfg.bgColor || "";
+        const colorMap = cfg.colorMap || {};
+        const bgColorMap = cfg.bgColorMap || {};
+        if (colorMap.hasOwnProperty(val)) c = colorMap[val];
+        if (bgColorMap.hasOwnProperty(val)) bg = bgColorMap[val];
+        return React.createElement("div", {
+          style: {
+            color: c || "inherit",
+            backgroundColor: bg || "transparent",
+            borderRadius: cfg.borderRadius || "16px",
+            padding: cfg.padding || "4px 8px",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontWeight: "500",
+            fontSize: "0.85em",
+            lineHeight: "1.2",
+            minWidth: "24px",
+            textAlign: "center",
+          },
+        }, formattedVal);
+      };
+    } else if (cellRendererType === "progress_bar") {
+      colRest.renderCell = (params) => {
+        const val = Number(params.value);
+        if (isNaN(val)) return "";
+        const min = cfg.minValue ?? 0;
+        const max = cfg.maxValue ?? 100;
+        const percent = Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100));
+        const formattedVal = params.formattedValue || params.value;
+        const barColor = cfg.color || "#1976d2";
+        const trackColor = cfg.trackColor || "#e0e0e0";
+        const barHeight = cfg.height || "8px";
+        const bar = React.createElement("div", {
+          style: { flex: 1, height: barHeight, backgroundColor: trackColor, borderRadius: "4px", overflow: "hidden" },
+        }, React.createElement("div", {
+          style: { width: `${percent}%`, height: "100%", backgroundColor: barColor, borderRadius: "4px" },
+        }));
+        if (cfg.showValue === false) {
+          return React.createElement("div", { style: { width: "100%", height: "100%", display: "flex", alignItems: "center" } }, bar);
+        }
+        return React.createElement("div", {
+          style: { width: "100%", height: "100%", display: "flex", alignItems: "center", gap: "8px" },
+        }, bar, React.createElement("span", {
+          style: { fontSize: "0.85em", minWidth: "40px", textAlign: "right" },
+        }, formattedVal));
+      };
+    } else if (cellRendererType === "url") {
+      colRest.renderCell = (params) => {
+        const val = params.value;
+        if (val == null) return "";
+        const baseUrl = cfg.baseUrl || "";
+        const href = baseUrl ? baseUrl + val : val;
+        const label = cfg.labelField ? params.row[cfg.labelField] : val;
+        return React.createElement("a", {
+          href, target: cfg.target || "_blank", rel: "noopener noreferrer",
+          style: { color: cfg.color || "inherit" },
+        }, label);
+      };
+    }
+    return colRest;
+  });
+
   const enhancedColumns = _enhanceColumnsWithDescriptions(
-    widenedColumns, showDescriptionInHeader
+    renderedColumns, showDescriptionInHeader
   );
   const ep = { ...rest, columns: enhancedColumns };
 
@@ -531,6 +607,14 @@ function _buildGridProps(props, unlimitedMode) {
         filterPanel: _FilterPanelWithApply,
       };
     }
+  }
+
+  // MUI DataGrid v8 expects rowSelectionModel ids as a Set, but JSON only supports Arrays.
+  if (ep.rowSelectionModel && Array.isArray(ep.rowSelectionModel.ids)) {
+    ep.rowSelectionModel = {
+      type: ep.rowSelectionModel.type || "include",
+      ids: new Set(ep.rowSelectionModel.ids),
+    };
   }
 
   if (pagination === false) {
@@ -760,6 +844,7 @@ UnlimitedDataGrid.displayName = "UnlimitedDataGrid";
 # DataGrid component
 # ---------------------------------------------------------------------------
 
+
 class DataGrid(rx.Component):
     """Reflex wrapper for the MUI X DataGrid (Community, v8).
 
@@ -840,6 +925,7 @@ class DataGrid(rx.Component):
     checkbox_selection: rx.Var[bool]
     row_selection: rx.Var[bool]
     disable_row_selection_on_click: rx.Var[bool]
+    row_selection_model: rx.Var[dict[str, Any]]
 
     # ---- pagination ----
     pagination: rx.Var[bool]
@@ -887,7 +973,9 @@ class DataGrid(rx.Component):
     on_filter_model_change: rx.EventHandler[_on_filter_model_change_spec]
     on_pagination_model_change: rx.EventHandler[_on_pagination_model_change_spec]
     on_row_selection_model_change: rx.EventHandler[_on_row_selection_model_change_spec]
-    on_column_visibility_model_change: rx.EventHandler[_on_column_visibility_model_change_spec]
+    on_column_visibility_model_change: rx.EventHandler[
+        _on_column_visibility_model_change_spec
+    ]
     on_rows_scroll_end: rx.EventHandler[_on_rows_scroll_end_spec]
     on_request_value_options: rx.EventHandler[_on_request_value_options_spec]
 
@@ -911,15 +999,16 @@ class DataGrid(rx.Component):
             The DataGrid component.
         """
         if row_id_field is not None:
-            props["get_row_id"] = rx.Var(
-                f"(row) => row.{row_id_field}"
-            )
+            import json
+
+            props["get_row_id"] = rx.Var(f"(row) => row[{json.dumps(row_id_field)}]")
         return super().create(*children, **props)
 
 
 # ---------------------------------------------------------------------------
 # WrappedDataGrid – auto-sized container
 # ---------------------------------------------------------------------------
+
 
 class WrappedDataGrid(DataGrid):
     """DataGrid wrapped in a ``<div>`` with explicit width / height.
@@ -949,11 +1038,14 @@ class WrappedDataGrid(DataGrid):
         props.setdefault("hide_footer", False)
         props.setdefault("always_show_filter_icon", True)
         props.setdefault("autosize_on_mount", True)
-        props.setdefault("autosize_options", {
-            "includeHeaders": True,
-            "includeOutliers": True,
-            "expand": True,
-        })
+        props.setdefault(
+            "autosize_options",
+            {
+                "includeHeaders": True,
+                "includeOutliers": True,
+                "expand": True,
+            },
+        )
 
         # Position the filter/preferences panel below the headers so it
         # does not obscure column titles.
@@ -970,7 +1062,10 @@ class WrappedDataGrid(DataGrid):
         else:
             existing = props["slot_props"]
             if "columnMenu" not in existing:
-                props["slot_props"] = {**existing, "columnMenu": default_slots["columnMenu"]}
+                props["slot_props"] = {
+                    **existing,
+                    "columnMenu": default_slots["columnMenu"],
+                }
 
         return Div.create(
             super().create(*children, **props),
@@ -982,6 +1077,7 @@ class WrappedDataGrid(DataGrid):
 # ---------------------------------------------------------------------------
 # Namespace (so users can write ``data_grid(...)`` and ``data_grid.column_def``)
 # ---------------------------------------------------------------------------
+
 
 class DataGridNamespace(rx.ComponentNamespace):
     """Namespace for the MUI DataGrid component family."""

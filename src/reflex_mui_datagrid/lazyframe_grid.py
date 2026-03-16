@@ -91,6 +91,7 @@ def _get_cache(cache_id: str) -> _LazyFrameCache:
 # File scanner
 # ---------------------------------------------------------------------------
 
+
 def scan_file(path: Path) -> tuple[pl.LazyFrame, dict[str, str]]:
     """Scan a data file and return a ``(LazyFrame, descriptions)`` tuple.
 
@@ -125,7 +126,9 @@ def scan_file(path: Path) -> tuple[pl.LazyFrame, dict[str, str]]:
 
     suffix = path.suffix.lower()
     # Handle two-part extensions like .vcf.gz
-    double_suffix = "".join(path.suffixes[-2:]).lower() if len(path.suffixes) >= 2 else ""
+    double_suffix = (
+        "".join(path.suffixes[-2:]).lower() if len(path.suffixes) >= 2 else ""
+    )
 
     descriptions: dict[str, str] = {}
 
@@ -174,6 +177,7 @@ def scan_file(path: Path) -> tuple[pl.LazyFrame, dict[str, str]]:
 # Lazy per-column value-options inference
 # ---------------------------------------------------------------------------
 
+
 def _infer_value_options_for_column(
     lf: pl.LazyFrame,
     col_name: str,
@@ -191,10 +195,9 @@ def _infer_value_options_for_column(
     string columns upfront.
     """
     cap = max_unique + 1
-    result = (
-        lf.select(pl.col(col_name).cast(pl.String).drop_nulls().unique().head(cap))
-        .collect()
-    )
+    result = lf.select(
+        pl.col(col_name).cast(pl.String).drop_nulls().unique().head(cap)
+    ).collect()
     values = result[col_name].drop_nulls().to_list()
     if 0 < len(values) <= max_unique:
         return sorted(str(v) for v in values)
@@ -245,6 +248,7 @@ def _get_or_compute_value_options(
 # ---------------------------------------------------------------------------
 # LazyFrameGridMixin
 # ---------------------------------------------------------------------------
+
 
 class LazyFrameGridMixin(rx.State, mixin=True):
     """Reflex State mixin for server-side scroll-loading DataGrids.
@@ -307,6 +311,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         "page": 0,
         "pageSize": _DEFAULT_CHUNK_SIZE,
     }
+    lf_grid_row_selection_model: dict[str, Any] = {"type": "include", "ids": []}
 
     # -- Backend-only vars (not sent to frontend) --
     _lf_grid_filter: dict[str, Any] = {}
@@ -388,6 +393,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         self._lf_grid_sort = []  # type: ignore[assignment]
         self.lf_grid_filter_model = {"items": []}  # type: ignore[assignment]
         self.lf_grid_active_filter_fields = []  # type: ignore[assignment]
+        self.lf_grid_row_selection_model = {"type": "include", "ids": []}  # type: ignore[assignment]
         self.lf_grid_pagination_model = {  # type: ignore[assignment]
             "page": 0,
             "pageSize": chunk_size,
@@ -559,6 +565,14 @@ class LazyFrameGridMixin(rx.State, mixin=True):
                 lines.append(f"{field}: {value}")
         self.lf_grid_selected_info = "\n".join(lines)  # type: ignore[assignment]
 
+    def handle_lf_grid_row_selection(self, selection_model: dict[str, Any]) -> None:
+        """Handle row selection change from the grid."""
+        self.lf_grid_row_selection_model = selection_model  # type: ignore[assignment]
+
+    def clear_lf_grid_selection(self) -> None:
+        """Clear all row selections."""
+        self.lf_grid_row_selection_model = {"type": "include", "ids": []}  # type: ignore[assignment]
+
     def clear_lf_grid_filters(self):
         """Clear all accumulated server-side filters and the MUI grid UI.
 
@@ -591,7 +605,11 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             clean_filter = {
                 **clean_filter,
                 "items": [
-                    {k: v for k, v in item.items() if k in ("field", "operator", "value")}
+                    {
+                        k: v
+                        for k, v in item.items()
+                        if k in ("field", "operator", "value")
+                    }
                     for item in clean_filter["items"]
                 ],
             }
@@ -684,12 +702,18 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         parts: list[str] = []
         if items:
             logic = self._lf_grid_filter.get("logicOperator", "and").upper()
-            fields = ", ".join(active_fields) if len(active_fields) <= 3 else f"{len(active_fields)} columns"
+            fields = (
+                ", ".join(active_fields)
+                if len(active_fields) <= 3
+                else f"{len(active_fields)} columns"
+            )
             parts.append(f"{len(items)} filter(s) ({logic}) on {fields}")
         if self._lf_grid_sort:
             sort_fields = ", ".join(e.get("field", "?") for e in self._lf_grid_sort)
             parts.append(f"{len(self._lf_grid_sort)} sort(s): {sort_fields}")
-        self.lf_grid_filter_debug = " | ".join(parts) if parts else "No active filters or sorts."  # type: ignore[assignment]
+        self.lf_grid_filter_debug = (
+            " | ".join(parts) if parts else "No active filters or sorts."
+        )  # type: ignore[assignment]
 
         # Build the filter JSON for download/display.
         clean_filter = self._lf_grid_filter or {}
@@ -697,7 +721,11 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             clean_filter = {
                 **clean_filter,
                 "items": [
-                    {k: v for k, v in item.items() if k in ("field", "operator", "value")}
+                    {
+                        k: v
+                        for k, v in item.items()
+                        if k in ("field", "operator", "value")
+                    }
                     for item in clean_filter["items"]
                 ],
             }
@@ -705,7 +733,9 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             "filter_model": clean_filter,
             "sort_model": self._lf_grid_sort or [],
         }
-        has_content = bool(preset["filter_model"].get("items")) or bool(preset["sort_model"])
+        has_content = bool(preset["filter_model"].get("items")) or bool(
+            preset["sort_model"]
+        )
         self.lf_grid_filter_preset_json = (  # type: ignore[assignment]
             json.dumps(preset, indent=2, ensure_ascii=False) if has_content else ""
         )
@@ -743,7 +773,11 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             if not raw_field:
                 continue
             # Resolve case-insensitively against the schema.
-            field = _resolve_field_name(raw_field, cache.schema) if cache.schema else raw_field
+            field = (
+                _resolve_field_name(raw_field, cache.schema)
+                if cache.schema
+                else raw_field
+            )
             if not field or field in cache._value_options_cache:
                 continue  # already computed or not a valid field
 
@@ -805,7 +839,9 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             self.lf_grid_columns = cache.col_defs  # type: ignore[assignment]
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        n_computed = sum(1 for v in cache._value_options_cache.values() if v is not None)
+        n_computed = sum(
+            1 for v in cache._value_options_cache.values() if v is not None
+        )
         print(
             f"[LazyFrameGrid] eager value options: "
             f"{n_computed} columns with dropdowns ({elapsed_ms:.1f}ms)"
@@ -889,6 +925,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
 # UI helper
 # ---------------------------------------------------------------------------
 
+
 def lazyframe_grid(
     state_cls: type,
     *,
@@ -953,6 +990,9 @@ def lazyframe_grid(
         filter_model=state_cls.lf_grid_filter_model,
         # -- Active filter fields (highlights filter icons in column headers) --
         active_filter_fields=state_cls.lf_grid_active_filter_fields,
+        # -- Selection --
+        row_selection_model=state_cls.lf_grid_row_selection_model,
+        on_row_selection_model_change=state_cls.handle_lf_grid_row_selection,
         # -- Display --
         loading=state_cls.lf_grid_loading,
         show_toolbar=show_toolbar,

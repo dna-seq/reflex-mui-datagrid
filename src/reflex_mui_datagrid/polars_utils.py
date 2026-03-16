@@ -177,7 +177,9 @@ def lazyframe_to_datagrid(
         # Auto-detect singleSelect for categorical / low-cardinality columns.
         if single_select_threshold > 0:
             value_options = _detect_single_select(
-                df, col_name, dtype,
+                df,
+                col_name,
+                dtype,
                 max_unique_abs=single_select_threshold,
             )
         if value_options is not None:
@@ -275,6 +277,7 @@ def build_column_defs_from_schema(
 # ---------------------------------------------------------------------------
 # Server-side filtering
 # ---------------------------------------------------------------------------
+
 
 def _resolve_field_name(field: str, schema: pl.Schema) -> str | None:
     """Resolve a field name against the schema, tolerating case mismatches.
@@ -505,6 +508,7 @@ def apply_filter_model(
 # Server-side sorting
 # ---------------------------------------------------------------------------
 
+
 def apply_sort_model(
     lf: pl.LazyFrame,
     sort_model: list[dict[str, str]],
@@ -606,6 +610,7 @@ def _dataframe_to_dicts(df: pl.DataFrame) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Quick-visualisation helper
 # ---------------------------------------------------------------------------
+
 
 def show_dataframe(
     data: pl.LazyFrame | pl.DataFrame,
