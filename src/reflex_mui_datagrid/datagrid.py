@@ -430,6 +430,16 @@ function _buildGridProps(props, unlimitedMode) {
     always_show_filter_icon,
     alwaysShowFilterIcon,
     onRequestValueOptions,
+    detail_columns,
+    detailColumns,
+    detail_height,
+    detailHeight,
+    detail_labels,
+    detailLabels,
+    detail_badge_fields,
+    detailBadgeFields,
+    detail_badge_colors,
+    detailBadgeColors,
     ...rest
   } = props;
   // Widen columns so the header title is not hidden when MUI shows
@@ -577,10 +587,24 @@ function _buildGridProps(props, unlimitedMode) {
       },
     },
   };
+  const detailPanelSx = {
+    '& .MuiDataGrid-cell[data-field="__detail_expand__"]': {
+      padding: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      cursor: "pointer",
+      borderRight: "none",
+    },
+    '& .MuiDataGrid-columnHeader[data-field="__detail_expand__"]': {
+      padding: 0,
+      minWidth: "40px !important",
+    },
+  };
   if (ep.sx) {
-    ep.sx = { ...headerIconSx, ...ep.sx };
+    ep.sx = { ...headerIconSx, ...detailPanelSx, ...ep.sx };
   } else {
-    ep.sx = headerIconSx;
+    ep.sx = { ...headerIconSx, ...detailPanelSx };
   }
 
   const shouldAlwaysShowFilterIcon =
@@ -620,7 +644,8 @@ function _buildGridProps(props, unlimitedMode) {
   if (pagination === false) {
     if (unlimitedMode) {
       // Patch active: put all rows on one "page" for continuous scrolling.
-      const totalRows = rest.rows ? rest.rows.length : (rest.rowCount || 0);
+      // Use ep.rows (which may include injected detail rows) if available.
+      const totalRows = ep.rows ? ep.rows.length : (rest.rows ? rest.rows.length : (rest.rowCount || 0));
       if (totalRows > 0) {
         ep.paginationModel = { page: 0, pageSize: totalRows };
         ep.pageSizeOptions = [totalRows];
@@ -641,6 +666,159 @@ function _buildGridProps(props, unlimitedMode) {
 // ---------------------------------------------------------------------------
 // 7. UnlimitedDataGrid wrapper component
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 7a. Detail panel helpers — React element builders for the setPanels API.
+//     These return React elements (not HTML strings) so the virtualiser can
+//     render them natively alongside rows.
+// ---------------------------------------------------------------------------
+function _smartBadgeColor(text) {
+  const t = text.toLowerCase();
+  if (/^pgs\\d/i.test(t))                             return ["#37474f","#eceff1"];
+  if (/below average|low risk/i.test(t))              return ["#c62828","#ffcdd2"];
+  if (/above average|high risk|elevated/i.test(t))    return ["#2e7d32","#c8e6c9"];
+  if (/average|moderate/i.test(t))                    return ["#e65100","#fff3e0"];
+  if (/quality:\\s*high/i.test(t))                     return ["#2e7d32","#e8f5e9"];
+  if (/quality:\\s*moderate/i.test(t))                 return ["#f57f17","#fff8e1"];
+  if (/quality:\\s*low/i.test(t))                      return ["#c62828","#ffebee"];
+  if (/percentile/i.test(t))                          return ["#1565c0","#e3f2fd"];
+  if (/pop:|population/i.test(t))                     return ["#00695c","#e0f2f1"];
+  if (/ref:|reference/i.test(t))                      return ["#6a1b9a","#f3e5f5"];
+  return ["#455a64","#eceff1"];
+}
+
+function _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeFields, badgeColors) {
+  const _badgeFieldSet = new Set(badgeFields || []);
+  const _badgeColorMap = badgeColors || {};
+  const items = detailCols.map((field, idx) => {
+    const val = row[field];
+    let label = (detailLabels || {})[field];
+    if (!label) {
+      const colDef = (columns || []).find((c) => c.field === field);
+      label = (colDef && (colDef.headerName || colDef.header_name)) || field;
+    }
+    const valStr = val != null ? String(val) : "";
+
+    if (_badgeFieldSet.has(field)) {
+      const parts = valStr.split("|").map((s) => s.trim()).filter(Boolean);
+      const badges = parts.map((p, i) => {
+        const customColor = _badgeColorMap[p] || _badgeColorMap[p.toLowerCase()];
+        const [fg, bg] = customColor
+          ? [customColor[0] || "#455a64", customColor[1] || "#eceff1"]
+          : _smartBadgeColor(p);
+        return React.createElement("span", {
+          key: i,
+          style: {
+            display: "inline-block", padding: "3px 10px", borderRadius: 3,
+            fontSize: 12, fontWeight: 500, letterSpacing: "0.02em",
+            background: bg, color: fg, whiteSpace: "nowrap",
+          },
+        }, p);
+      });
+      return React.createElement("div", {
+        key: field,
+        style: {
+          display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6,
+          padding: "8px 0 10px 0",
+          borderBottom: "1px solid rgba(0,0,0,0.08)",
+        },
+      }, ...badges);
+    }
+
+    return React.createElement("div", {
+      key: field,
+      style: {
+        display: "flex", gap: 12, padding: "7px 0",
+        fontSize: 13, lineHeight: 1.55,
+      },
+    },
+      React.createElement("span", {
+        style: { fontWeight: 600, minWidth: 150, flexShrink: 0, color: "rgba(0,0,0,0.6)" },
+      }, label + ":"),
+      React.createElement("span", {
+        style: { color: "rgba(0,0,0,0.87)", whiteSpace: "pre-wrap", wordBreak: "break-word" },
+      }, valStr)
+    );
+  });
+  return items;
+}
+
+// ---------------------------------------------------------------------------
+// 7b. _DetailPanelsSlot — replaces the no-op Community detailPanels slot.
+//     GridVirtualScroller only passes { virtualScroller } to this slot
+//     (slotProps.detailPanels is NOT merged), so we read additional data
+//     from _detailPanelDataRef — a module-level ref set by each
+//     UnlimitedDataGrid instance before render.  For pages with multiple
+//     grids, each instance overwrites the ref during its own render phase,
+//     which is safe because React renders synchronously.
+// ---------------------------------------------------------------------------
+const _detailPanelDataRef = { current: null };
+
+function _DetailPanelsSlot(props) {
+  const { virtualScroller } = props;
+  const data = _detailPanelDataRef.current;
+  const setPanels = virtualScroller && virtualScroller.setPanels;
+
+  const expandedRowIds = data && data.expandedRowIds;
+  const detailCols     = data && data.detailCols;
+  const detailLabels   = data && data.detailLabels;
+  const detailHeight   = data && data.detailHeight;
+  const badgeFields    = data && data.badgeFields;
+  const badgeColors    = data && data.badgeColors;
+  const rows           = data && data.rows;
+  const columns        = data && data.columns;
+  const getRowIdFn     = data && data.getRowIdFn;
+
+  React.useEffect(() => {
+    if (typeof setPanels !== "function") return;
+    if (!expandedRowIds || expandedRowIds.size === 0) {
+      setPanels(new Map());
+      return;
+    }
+
+    const rowById = {};
+    for (const row of (rows || [])) {
+      const id = getRowIdFn ? getRowIdFn(row) : row.id;
+      rowById[id] = row;
+    }
+
+    const calcHeight = (detailHeight && detailHeight > 0)
+      ? detailHeight
+      : Math.max(120, (detailCols || []).length * 32 + 24);
+
+    const map = new Map();
+    for (const rowId of expandedRowIds) {
+      const row = rowById[rowId];
+      if (!row) continue;
+
+      const content = _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeFields, badgeColors);
+      const panel = React.createElement("div", {
+        key: "__detail_panel_" + String(rowId),
+        style: {
+          width: "100%",
+          minHeight: calcHeight,
+          overflow: "auto",
+          padding: "14px 24px 14px 88px",
+          boxSizing: "border-box",
+          background: "var(--DataGrid-containerBackground, #fafafa)",
+          borderBottom: "1px solid var(--DataGrid-rowBorderColor, rgba(224,224,224,1))",
+          fontFamily: "var(--DataGrid-fontFamily, inherit)",
+          fontSize: "var(--DataGrid-fontSize, 0.875rem)",
+        },
+      }, ...content);
+      map.set(rowId, panel);
+    }
+    setPanels(map);
+
+    return () => { setPanels(new Map()); };
+  }, [setPanels, expandedRowIds, rows, columns, detailCols, detailLabels,
+      detailHeight, badgeFields, badgeColors, getRowIdFn]);
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// 7b. UnlimitedDataGrid wrapper component
+// ---------------------------------------------------------------------------
 const UnlimitedDataGrid = React.forwardRef((props, ref) => {
   const { onRowsScrollEnd, scrollEndThreshold, debugLog } = props;
   const log = !!debugLog;
@@ -648,6 +826,9 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
   const scrollEndLockedRef = React.useRef(false);
   const renderCountRef = React.useRef(0);
   const rowsLength = Array.isArray(props.rows) ? props.rows.length : 0;
+
+  // Row detail panel: track which rows are expanded.
+  const [expandedRowIds, setExpandedRowIds] = React.useState(() => new Set());
 
   renderCountRef.current++;
   _dgLog(log, "render", {
@@ -664,14 +845,6 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
   }, [rowsLength, log]);
 
   // Attach scroll listener to MUI virtual scroller.
-  // IMPORTANT: rowsLength is intentionally excluded from the dependency
-  // array.  The listener does not need re-attaching when rows change —
-  // the unlock effect above releases the lock, and the next user-driven
-  // scroll event will trigger loading.  Including rowsLength caused an
-  // infinite loop: each row append re-ran this effect, which called
-  // onScroll() immediately before MUI updated the virtual scroller's
-  // dimensions, making `remaining` appear small and firing scroll-end
-  // again (row append → effect re-run → onScroll → fire → row append …).
   React.useEffect(() => {
     if (typeof onRowsScrollEnd !== "function") return;
     const container = containerRef.current;
@@ -712,8 +885,6 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     };
 
     scroller.addEventListener("scroll", onScroll, { passive: true });
-    // Defer the initial position check to after the browser has painted,
-    // ensuring MUI's virtual scroller dimensions are up to date.
     const rafId = requestAnimationFrame(() => onScroll());
     return () => {
       cancelAnimationFrame(rafId);
@@ -721,10 +892,7 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     };
   }, [onRowsScrollEnd, scrollEndThreshold, log]);
 
-  // When filterMode="server" and the custom filter panel is active,
-  // listen for the _applyFilter custom event dispatched by the Apply
-  // button instead of letting MUI fire onFilterModelChange on every
-  // keystroke.
+  // _applyFilter listener for server-side filtering.
   const realOnFilterModelChange = props.onFilterModelChange;
   const isServerFilter = props.filterMode === "server";
 
@@ -741,9 +909,7 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     return () => container.removeEventListener("_applyFilter", handler);
   }, [isServerFilter, realOnFilterModelChange, log]);
 
-  // Listen for _requestValueOptions events from the filter icon button.
-  // Forwards the column field name to the Python handler so value options
-  // can be computed on demand (for large datasets where eager init is skipped).
+  // _requestValueOptions listener.
   const onRequestValueOptions = props.onRequestValueOptions;
   React.useEffect(() => {
     if (typeof onRequestValueOptions !== "function") return;
@@ -758,21 +924,128 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     return () => container.removeEventListener("_requestValueOptions", handler);
   }, [onRequestValueOptions, log]);
 
+  // ---- Build effective props ----
   const effectiveProps = _buildGridProps(props, _muiPatchActive);
 
-  // In server filter mode:
-  // 1. Remove onFilterModelChange so MUI doesn't call it on every keystroke.
-  //    The Apply button dispatches a custom event that we handle above.
-  // 2. Replace the controlled filterModel with a local state that only
-  //    syncs from the Python prop when it genuinely changes (e.g. after
-  //    Apply, Clear All, or preset upload).  This prevents MUI from
-  //    resetting the user's in-progress edits on unrelated re-renders.
+  // ---- Detail panel: expander column + onCellClick toggle ----
+  const _detailCols = props.detailColumns || props.detail_columns;
+  const _detailLabels = props.detailLabels || props.detail_labels || {};
+  const _detailH = props.detailHeight || props.detail_height || 0;
+  const _badgeFields = props.detailBadgeFields || props.detail_badge_fields || [];
+  const _badgeColors = props.detailBadgeColors || props.detail_badge_colors || {};
+  const hasDetailPanel = Array.isArray(_detailCols) && _detailCols.length > 0;
+
+  if (hasDetailPanel) {
+    // Inject expander column after the checkbox column (if present).
+    const expanderCol = {
+      field: "__detail_expand__",
+      headerName: "",
+      width: 40,
+      minWidth: 40,
+      maxWidth: 40,
+      sortable: false,
+      filterable: false,
+      disableColumnMenu: true,
+      disableReorder: true,
+      resizable: false,
+      renderCell: (params) => {
+        const rowId = (effectiveProps.getRowId || ((r) => r.id))(params.row);
+        const isExp = expandedRowIds.has(rowId);
+        return React.createElement("div", {
+          role: "button",
+          tabIndex: 0,
+          "aria-label": isExp ? "Collapse row details" : "Expand row details",
+          "aria-expanded": isExp,
+          onClick: (e) => {
+            e.stopPropagation();
+            setExpandedRowIds((prev) => {
+              const next = new Set(prev);
+              if (next.has(rowId)) next.delete(rowId);
+              else next.add(rowId);
+              return next;
+            });
+          },
+          style: {
+            display: "flex", alignItems: "center",
+            justifyContent: "center", width: "100%", height: "100%",
+            cursor: "pointer", userSelect: "none",
+            color: isExp ? "var(--mui-palette-primary-main, #1976d2)" : "rgba(0,0,0,0.54)",
+            transition: "transform 0.2s cubic-bezier(0.4,0,0.2,1), color 0.2s",
+            transform: isExp ? "rotate(180deg)" : "rotate(0deg)",
+          },
+        }, React.createElement("svg", {
+          width: 20, height: 20, viewBox: "0 0 24 24",
+          fill: "currentColor", xmlns: "http://www.w3.org/2000/svg",
+          style: { pointerEvents: "none" },
+        }, React.createElement("path", {
+          d: "M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z",
+        })));
+      },
+    };
+    const cols = effectiveProps.columns || [];
+    const checkboxIdx = cols.findIndex((c) => c.field === "__check__" || c.field === "__GRID_CHECKBOX_SELECTION_FIELD__");
+    if (checkboxIdx >= 0) {
+      cols.splice(checkboxIdx + 1, 0, expanderCol);
+    } else {
+      cols.unshift(expanderCol);
+    }
+    effectiveProps.columns = cols;
+
+    // Intercept cell clicks on the expander column.
+    const origOnCellClick = effectiveProps.onCellClick;
+    const origOnRowClick = effectiveProps.onRowClick;
+    const _getRowIdFn = effectiveProps.getRowId || ((r) => r.id);
+    let _lastClickWasExpander = false;
+
+    effectiveProps.onCellClick = (params, event) => {
+      _lastClickWasExpander = false;
+      if (params.field === "__detail_expand__") {
+        _lastClickWasExpander = true;
+        const rowId = _getRowIdFn(params.row);
+        setExpandedRowIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(rowId)) next.delete(rowId);
+          else next.add(rowId);
+          return next;
+        });
+        return;
+      }
+      if (typeof origOnCellClick === "function") origOnCellClick(params, event);
+    };
+
+    effectiveProps.onRowClick = (params, event) => {
+      if (_lastClickWasExpander) { _lastClickWasExpander = false; return; }
+      if (typeof origOnRowClick === "function") origOnRowClick(params, event);
+    };
+  }
+
+  // ---- Detail panel: wire _DetailPanelsSlot via setPanels API ----
+  // Override the Community no-op detailPanels slot with our component that
+  // calls virtualScroller.setPanels(map) — the same mechanism MUI X Pro uses.
+  // GridVirtualScroller only passes { virtualScroller } to the slot (ignoring
+  // slotProps), so we communicate extra data via a module-level ref.
+  if (hasDetailPanel) {
+    _detailPanelDataRef.current = {
+      expandedRowIds: expandedRowIds,
+      detailCols: _detailCols,
+      detailLabels: _detailLabels,
+      detailHeight: _detailH,
+      badgeFields: _badgeFields,
+      badgeColors: _badgeColors,
+      rows: props.rows || [],
+      columns: effectiveProps.columns || [],
+      getRowIdFn: effectiveProps.getRowId || ((r) => r.id),
+    };
+    const existingSlots = effectiveProps.slots || {};
+    effectiveProps.slots = { ...existingSlots, detailPanels: _DetailPanelsSlot };
+  }
+
+  // ---- Server filter mode: local filter model ----
   const pythonFilterModel = isServerFilter ? props.filterModel : undefined;
   const [localFilterModel, setLocalFilterModel] = React.useState(
     pythonFilterModel || { items: [] }
   );
 
-  // Track the previous Python filter model to detect genuine changes.
   const prevPythonFilterRef = React.useRef(JSON.stringify(pythonFilterModel));
   React.useEffect(() => {
     if (!isServerFilter) return;
@@ -785,19 +1058,14 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
 
   if (isServerFilter) {
     delete effectiveProps.onFilterModelChange;
-    // Use the local filter model instead of the Python-controlled one.
     effectiveProps.filterModel = localFilterModel;
 
-    // Build a set of singleSelect field names for quick lookup.
     const singleSelectFields = new Set(
       (effectiveProps.columns || [])
         .filter((c) => c.type === "singleSelect")
         .map((c) => c.field)
     );
 
-    // Let MUI update the local state when the user edits in the panel.
-    // For singleSelect columns, default the operator to "is" when MUI
-    // creates a new filter item with an empty/missing operator.
     effectiveProps.onFilterModelChange = (model) => {
       if (singleSelectFields.size > 0 && model && Array.isArray(model.items)) {
         const patched = model.items.map((item) => {
@@ -815,8 +1083,6 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
 
   const grid = React.createElement(MuiDataGrid_, { ...effectiveProps, ref });
 
-  // When we set a large pageSize (unlimited mode), wrap with the Error
-  // Boundary so a failed patch doesn't crash the page.
   if (props.pagination === false && _muiPatchActive) {
     const fallback = () => {
       _dgLog(log, "WARN: falling back to paginated mode (patch failed)");
@@ -959,6 +1225,13 @@ class DataGrid(rx.Component):
     column_grouping_model: rx.Var[list[dict[str, Any]]]
     disable_column_selector: rx.Var[bool]
     disable_density_selector: rx.Var[bool]
+
+    # ---- row detail panel ----
+    detail_columns: rx.Var[list[str]]
+    detail_height: rx.Var[int]
+    detail_labels: rx.Var[dict[str, str]]
+    detail_badge_fields: rx.Var[list[str]]
+    detail_badge_colors: rx.Var[dict[str, list[str]]]
 
     # ---- slots / customisation ----
     slot_props: rx.Var[dict[str, Any]]

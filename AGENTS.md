@@ -39,6 +39,10 @@ This project is uv based, it is a reflex wrapper for mui x-data-grid UI componen
 
 - **`pagination=False` for scrollable grids**: The `WrappedDataGrid` defaults to `pagination=True` and `auto_page_size=True`. You MUST explicitly pass `pagination=False` and `hide_footer=True` to get a continuously scrollable grid. Without this, rows are silently paginated and only the first page is visible.
 
+- **Column definitions stored in state vars MUST be JSON-serializable**: Storing `ColumnDef` objects or `rx.Var`-based renderers in state vars (e.g. `prs_columns`) fails because Reflex cannot serialize them. Use `cell_renderer_type` + `cell_renderer_config` (plain strings/dicts) for columns that go through state; keep `rx.Var`-based renderers only for static, compile-time column definitions.
+
+- **New public APIs must be exported in `__init__.py`**: When adding new classes (e.g. `BadgeCellRenderer`, `ProgressBarCellRenderer`), they must be added to `reflex_mui_datagrid/__init__.py` so they can be imported by users. Missing exports cause `ImportError`.
+
 ## LazyFrame Grid Requirements (CRITICAL)
 
 - **Truly lazy behavior**: `set_lazyframe` and all grid operations MUST be memory-safe. NEVER collect the entire LazyFrame. Every operation (row count, value options inference, page slicing) must use lazy queries that Polars can push down into the scan. If a full-dataset scan is unavoidable (e.g. counting rows on a format without metadata), it must be a streaming count — never materialise all rows into a DataFrame.
@@ -55,11 +59,20 @@ This project is uv based, it is a reflex wrapper for mui x-data-grid UI componen
 - **Local filter model**: In server filter mode, the controlled `filterModel` prop from Python is replaced with a local React state (`localFilterModel`). This local state syncs from the Python prop only when the prop genuinely changes (detected via `JSON.stringify` comparison). This prevents MUI from resetting the user's in-progress edits when unrelated state vars (like `lf_grid_loading`) cause re-renders.
 - **Custom event dispatch**: The Apply button dispatches a `_applyFilter` CustomEvent (with `bubbles: true`) on the MUI grid root element. The `UnlimitedDataGrid` wrapper listens for this event on its container div and forwards the filter model to the real Python `onFilterModelChange` callback.
 - **Operator preservation in merge_filter_model**: When MUI sends a filter item with a changed operator but no value (user changed the operator dropdown), `merge_filter_model` updates the operator on the existing accumulated filter item instead of ignoring the change. This prevents the operator from "snapping back" to the previous value.
+- **Filter panel must close on Apply/Reset**: When the user clicks Apply or Reset in the filter panel, the panel must close automatically. Use `apiRef.current.hideFilterPanel()` after dispatching the filter event.
+- **Default operator for singleSelect columns**: For enum-like (`singleSelect`) columns (e.g. chromosome), default the filter operator to `"is"` unless the user changes it. Avoid leaving the operator empty.
 - **Case-insensitive field name resolution (CRITICAL)**: Reflex's serialisation layer may convert column names to different cases (e.g. `DP` → `dp`, `MIN_DP` → `min_dp`). All filter/sort/value-options code MUST use `_resolve_field_name(raw_field, schema)` to resolve field names case-insensitively against the schema before using them in Polars expressions. Never do `if field not in schema` directly — always resolve first. The canonical column name from the schema must be used in `pl.col(field)` calls to avoid DataFusion predicate pushdown errors.
+
+## MUI X Internals
+
+- **`setPanels` exists in the Community edition virtualizer**: The `setPanels` API lives in `@mui/x-virtualizer` (the shared virtualizer package used by all editions), not gated behind a Pro license. It is a React `useState` setter accepting `Map<GridRowId, ReactNode>`. After rendering each row, the virtualizer checks `panels.get(id)` and appends the panel element. Access it via `apiRef.current.virtualizer.api.getters.setPanels`. This is how MUI Pro implements detail panels — the Pro package only adds `GridDetailPanels` which calls `setPanels`.
+- **`rowSelectionModel` requires Set conversion**: MUI DataGrid v8 expects `rowSelectionModel.ids` as a `Set<GridRowId>`, but Python/JSON sends arrays. The JS wrapper must convert arrays to `Set` before passing to MUI.
+- **`row_id_field` with spaces needs bracket notation**: When `row_id_field` contains spaces (e.g. `"PGS ID"`), use `row["PGS ID"]` in JS instead of dot notation to avoid invalid JavaScript.
 
 ## Failed Hypotheses (do NOT repeat)
 
-- **CSS-only fixes for column header icon alignment DO NOT WORK**: Adding `flex: 1 1 auto` to `.MuiDataGrid-columnHeaderTitleContainerContent` via MUI `sx` prop, global `<style>` injection with `!important`, or generic CSS selectors (`:first-child:not(...)`, `:not(...)`) all fail to push filter/sort icons to the right edge when `renderHeader` produces two-line headers (name + description). MUI v8's styled-component output overrides `sx` regardless of specificity.  The **working approach** is a `ref` callback on the `renderHeader` div that imperatively sets `flex: 1 1 auto` on the parent `columnHeaderTitleContainerContent` DOM element (see `_forceParentFlex`).
+- **CSS-only fixes for column header icon alignment DO NOT WORK**: Adding `flex: 1 1 auto` to `.MuiDataGrid-columnHeaderTitleContainerContent` via MUI `sx` prop, global `<style>` injection with `!important`, or generic CSS selectors (`:first-child:not(...)`, `:not(...)`) all fail to push filter/sort icons to the right edge when `renderHeader` produces two-line headers (name + description). MUI v8's styled-component output overrides `sx` regardless of specificity. The **working approach** is a `ref` callback on the `renderHeader` div that imperatively sets `flex: 1 1 auto` on the parent `columnHeaderTitleContainerContent` DOM element (see `_forceParentFlex`).
+- **Synthetic detail rows injected into the rows array DO NOT WORK**: Injecting `__is_detail_row__` synthetic rows into the grid's `rows` array and overriding `getRowHeight`/`getRowClassName`/`renderCell` to render detail content causes severe performance issues and visual overlay glitches. MUI's virtualizer fights the injected rows. The correct approach is to use the `setPanels` API from `@mui/x-virtualizer` (see MUI X Internals above).
 
 ## Coding Standards
 
@@ -127,3 +140,19 @@ Never claim "tests would have caught this" without running the buggy code agains
 - **Claiming tests "would catch bugs" without demonstrating failure on buggy code**
 
 **Meaningless Tests to Avoid** (common AI-generated anti-patterns):
+
+## Learned User Preferences
+
+- **Never assume the user didn't rebuild**: When a fix doesn't appear to work in the browser, do not suggest the user forgot to rebuild or update the code. Investigate the actual problem instead.
+- **Trust user-provided DOM structure**: When the user provides DOM paths or structure from their browser, prefer that information over automated browser inspection which can be unreliable.
+- **Precise scope when removing code**: When asked to remove a specific feature, remove only what was asked. Do not remove adjacent related functionality unless explicitly requested.
+- **Extend the library rather than working around it**: If a feature exists in the TypeScript MUI DataGrid but not in the Reflex wrapper, extend the library to support it rather than building hacky workarounds.
+- **Provide demos for new features**: New features should be demonstrated in the existing demo app (e.g. genetic variants/PRS tab) rather than only documented.
+- **Never revert always-visible filter icons to MUI default**: The custom always-visible filter icon buttons in column headers are a core UX requirement. Never replace them with MUI's default hover-only behavior.
+- **Document failed hypotheses immediately**: When an approach fails, document it in the Failed Hypotheses section of AGENTS.md to prevent future agents from retrying the same approach.
+
+## Learned Workspace Facts
+
+- **Demo app**: Run with `uv sync` then `uv run demo` from the project root. The demo uses `workspace = true` in `pyproject.toml` to depend on the local repo version.
+- **Filter JSON `id` field**: The `id` in MUI filter items is MUI-internal and should be stripped from filter JSON output sent to the user.
+- **Dynamic scrolling monkey-patching**: Dynamic scrolling with `pagination=False` originally used monkey-patching of MUI's pagination logic; this broke when Reflex switched from Next.js to Vite/ESM (CommonJS `require()` no longer available).

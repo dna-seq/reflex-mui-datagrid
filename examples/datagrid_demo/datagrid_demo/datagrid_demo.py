@@ -63,43 +63,123 @@ PARQUET_HF_URL: str = (
 # ---------------------------------------------------------------------------
 
 
+def _build_interpretation(
+    trait: str,
+    percentile: float,
+    population: str,
+    pct_method: str,
+    auroc: float | None,
+    match_rate: float,
+) -> str:
+    """Generate a realistic PRS interpretation paragraph."""
+    if percentile < 25:
+        risk_level = "below average predisposition"
+        risk_tag = "Below average predisposition"
+    elif percentile < 75:
+        risk_level = "average predisposition"
+        risk_tag = "Average predisposition"
+    else:
+        risk_level = "above average predisposition"
+        risk_tag = "Above average predisposition"
+
+    ordinal = f"{int(percentile)}th" if percentile != 1 else "1st"
+    auroc_str = f"AUROC={auroc:.3f}" if auroc else "No AUROC available to assess model accuracy"
+
+    return (
+        f"Your PRS for {trait} is at the {ordinal} percentile "
+        f"-- {risk_level} compared to the {population} reference population. "
+        f"For standard PRS models, higher percentile = more genetic variants "
+        f"associated with increased risk. Reference distributions source: "
+        f"local percentiles cache. These are precomputed from reference panel "
+        f"scoring and are not provided directly by the PGS Catalog API."
+    ), risk_tag, (
+        f"Estimated percentile: {percentile}% ({pct_method}, from allele frequencies "
+        f"in the scoring file). {auroc_str}. "
+        f"{match_rate:.0f}% of scoring variants matched."
+    ), (
+        "Reference source: local percentiles cache. These precomputed distributions "
+        "are generated from reference panel scoring (not direct PGS Catalog score "
+        "API percentiles)."
+    )
+
+
 def _build_prs_lazyframe() -> pl.LazyFrame:
     import random
 
     random.seed(42)
-    traits = [
-        "Breast cancer",
-        "Prostate cancer",
-        "Parkinson's disease",
-        "Rheumatoid arthritis",
-        "Systolic blood pressure",
-        "Stroke",
-        "Type 1 diabetes",
-        "Hypertension",
-        "Coronary artery disease",
-    ]
-    methods = ["theoretical", "1000G ref"]
-    qualities = ["Low", "Moderate", "High"]
 
+    prs_records = [
+        {"pgs_id": "PGS000028", "trait": "Breast cancer", "score": 3.607,
+         "pct": 0.0, "pop": "East Asian, European, Hispanic or Latin American",
+         "method": "theoretical", "auroc": 0.6, "quality": "Moderate",
+         "match": 62.0},
+        {"pgs_id": "PGS000056", "trait": "Parkinson's disease", "score": 1.625,
+         "pct": 0.0, "pop": "European",
+         "method": "theoretical", "auroc": None, "quality": "Moderate",
+         "match": 52.0},
+        {"pgs_id": "PGS001781", "trait": "Type 2 diabetes (T2D)", "score": 0.035,
+         "pct": 51.3, "pop": "European",
+         "method": "theoretical", "auroc": 0.725, "quality": "High",
+         "match": 63.0},
+        {"pgs_id": "PGS002760", "trait": "Epilepsy", "score": -1.141,
+         "pct": 0.0, "pop": "European",
+         "method": "theoretical", "auroc": None, "quality": "Moderate",
+         "match": 45.0},
+        {"pgs_id": "PGS003470", "trait": "HOMA-IR", "score": -0.053,
+         "pct": 0.0, "pop": "Hispanic or Latin American",
+         "method": "theoretical", "auroc": None, "quality": "Moderate",
+         "match": 38.0},
+    ]
+
+    more_traits = [
+        ("PGS000017", "Coronary artery disease", 2.145, 68.2, "European", "1000G ref", 0.612, "High", 71.0),
+        ("PGS000039", "Rheumatoid arthritis", -0.832, 15.4, "European", "theoretical", 0.581, "Moderate", 55.0),
+        ("PGS000074", "Systemic lupus erythematosus", 1.902, 82.7, "East Asian", "theoretical", None, "Low", 42.0),
+        ("PGS000091", "Atrial fibrillation", 0.567, 61.0, "European", "1000G ref", 0.710, "High", 68.0),
+        ("PGS000182", "Hypertension", -1.340, 8.3, "European", "theoretical", 0.598, "Moderate", 59.0),
+        ("PGS000329", "Stroke", 0.234, 54.1, "European", "theoretical", None, "Low", 47.0),
+        ("PGS000401", "Prostate cancer", 3.891, 95.2, "European", "1000G ref", 0.780, "High", 74.0),
+        ("PGS000512", "Alzheimer's disease", -0.178, 42.6, "European", "theoretical", 0.630, "Moderate", 51.0),
+        ("PGS000618", "Asthma", 1.056, 71.8, "European", "theoretical", 0.550, "Low", 48.0),
+        ("PGS000789", "Major depressive disorder", -0.445, 31.2, "European", "1000G ref", None, "Low", 39.0),
+    ]
+    for pgs_id, trait, score, pct, pop, method, auroc, quality, match in more_traits:
+        prs_records.append({
+            "pgs_id": pgs_id, "trait": trait, "score": score,
+            "pct": pct, "pop": pop,
+            "method": method, "auroc": auroc, "quality": quality,
+            "match": match,
+        })
+
+    populations = ["AFR", "AMR", "EAS", "EUR", "SAS"]
     data = []
-    for i in range(100):
-        data.append(
-            {
-                "PGS ID": f"PGS{i:06d}",
-                "Trait": random.choice(traits),
-                "PRS Score": round(random.uniform(-5.0, 5.0), 4),
-                "Percentile": round(random.uniform(0, 100), 1),
-                "AFR": round(random.choice([0.0, 100.0]), 1),
-                "AMR": round(random.choice([0.0, 100.0]), 1),
-                "EAS": round(random.choice([0.0, 100.0]), 1),
-                "EUR": round(random.choice([0.0, 100.0]), 1),
-                "SAS": round(random.choice([0.0, 100.0]), 1),
-                "Pct. Method": random.choice(methods),
-                "AUROC": round(random.uniform(0.5, 0.9), 3),
-                "Quality": random.choice(qualities),
-                "Match Rate": round(random.uniform(20.0, 80.0), 1),
-            }
+    for rec in prs_records:
+        interpretation, risk_tag, est_pct, ref_source = _build_interpretation(
+            rec["trait"], rec["pct"], rec["pop"],
+            rec["method"], rec["auroc"], rec["match"],
         )
+        pop_values = {}
+        for p in populations:
+            pop_values[p] = round(random.uniform(0, 100), 1) if random.random() > 0.4 else ""
+
+        row = {
+            "PGS ID": rec["pgs_id"],
+            "Trait": rec["trait"],
+            "PRS Score": rec["score"],
+            "Percentile": rec["pct"],
+            **{p: v for p, v in pop_values.items()},
+            "Pct. Method": rec["method"],
+            "AUROC": rec["auroc"] if rec["auroc"] is not None else "",
+            "Quality": rec["quality"],
+            "Match Rate": rec["match"],
+            "Population": rec["pop"],
+            # Hidden detail-only fields:
+            "risk_hint": f"{rec['pgs_id']}  |  {risk_tag}  |  Quality: {rec['quality']}  |  Pop: {rec['pop']}  |  Ref: precomputed (AFR, AMR, EAS, EUR, SAS)",
+            "interpretation": interpretation,
+            "estimated_percentile": est_pct,
+            "reference_source": ref_source,
+        }
+        data.append(row)
     return pl.LazyFrame(data)
 
 
@@ -317,6 +397,12 @@ class AppState(rx.State):
         lf = _build_prs_lazyframe()
         rows, col_defs = lazyframe_to_datagrid(lf)
 
+        # Fields shown only in the expandable detail panel, not as grid columns.
+        detail_only_fields = {
+            "risk_hint", "interpretation", "estimated_percentile",
+            "reference_source", "Population",
+        }
+
         population_colors: dict[str, tuple[str, str]] = {
             "AFR": ("#f57f17", "#fff9c4"),
             "AMR": ("#d81b60", "#f8bbd0"),
@@ -325,7 +411,10 @@ class AppState(rx.State):
             "SAS": ("#8e24aa", "#e1bee7"),
         }
 
+        visible_col_defs = []
         for col in col_defs:
+            if col.field in detail_only_fields:
+                continue
             if col.field == "Percentile":
                 col.cell_renderer_type = "progress_bar"
                 col.cell_renderer_config = {
@@ -361,9 +450,10 @@ class AppState(rx.State):
                     "trackColor": "#e8e8e8",
                     "showValue": True,
                 }
+            visible_col_defs.append(col)
 
         self.prs_rows = rows
-        self.prs_columns = [c.dict() for c in col_defs]
+        self.prs_columns = [c.dict() for c in visible_col_defs]
         self.prs_row_count = len(rows)
 
     def _load_employees(self) -> None:
@@ -388,7 +478,13 @@ class AppState(rx.State):
         if row:
             pgs = row.get("PGS ID", "")
             trait = row.get("Trait", "")
-            self.prs_selected = f"Selected row: {pgs} - {trait}"
+            quality = row.get("Quality", "")
+            pct = row.get("Percentile", "")
+            self.prs_selected = (
+                f"Selected: {pgs} -- {trait} | "
+                f"Percentile: {pct}% | Quality: {quality} | "
+                f"Expand the row to see the full interpretation."
+            )
 
     def handle_emp_row_click(self, params: dict[str, Any]) -> None:
         """Handle employee row click."""
@@ -442,11 +538,18 @@ def _status_box(*children: rx.Component) -> rx.Component:
 
 
 def prs_tab() -> rx.Component:
-    """PRS Results tab content."""
+    """PRS Results tab content with expandable interpretation detail panels."""
     return rx.box(
         rx.text(
-            "A mock PRS Results dataset demonstrating cell_renderer_type / "
-            "cell_renderer_config on ColumnDef for colored badges and progress bars.",
+            "Polygenic Risk Score results with ",
+            rx.text("expandable detail panels", weight="bold", as_="span"),
+            ". Click the ",
+            rx.text("\u25B6", as_="span", weight="bold"),
+            " chevron on any row to reveal the full PRS interpretation, "
+            "estimated percentile breakdown, and reference source -- "
+            "information that would clutter the grid as columns but is "
+            "essential for understanding each score. "
+            "Badges and progress bars highlight key values.",
             margin_bottom="1em",
             color="var(--gray-11)",
         ),
@@ -461,6 +564,21 @@ def prs_tab() -> rx.Component:
                 checkbox_selection=True,
                 disable_row_selection_on_click=True,
                 on_row_click=AppState.handle_prs_row_click,
+                detail_columns=[
+                    "risk_hint",
+                    "interpretation",
+                    "estimated_percentile",
+                    "reference_source",
+                ],
+                detail_labels={
+                    "risk_hint": "Summary",
+                    "interpretation": "Interpretation",
+                    "estimated_percentile": "Estimated Percentile",
+                    "reference_source": "Reference Source",
+                },
+                detail_badge_fields=["risk_hint"],
+                detail_height=200,
+                height="600px",
             ),
             rx.text("Loading data...", color="var(--gray-9)", font_style="italic"),
         ),
@@ -706,7 +824,7 @@ def index() -> rx.Component:
             rx.tabs.content(vcf_tab(), value="vcf"),
             rx.tabs.content(parquet_tab(), value="parquet"),
             rx.tabs.content(genome_tab(), value="genome"),
-            default_value="parquet",
+            default_value="prs",
         ),
         padding="2em",
         max_width="1400px",

@@ -939,6 +939,11 @@ def lazyframe_grid(
     show_filter_panel: bool = True,
     debug_log: bool = True,
     on_row_click: Any = None,
+    detail_columns: list[str] | None = None,
+    detail_height: int | None = None,
+    detail_labels: dict[str, str] | None = None,
+    detail_badge_fields: list[str] | None = None,
+    detail_badge_colors: dict[str, list[str]] | None = None,
     **extra_props: Any,
 ) -> rx.Component:
     """Return a pre-wired ``data_grid(...)`` bound to a :class:`LazyFrameGridMixin` state.
@@ -969,6 +974,22 @@ def lazyframe_grid(
         debug_log: Enable browser console debug logging.
         on_row_click: Override the default row-click handler.  If ``None``,
             uses the mixin's ``handle_lf_grid_row_click``.
+        detail_columns: List of field names to display in the expandable
+            detail panel below each row.  Fields can reference any key
+            in the row data, not just visible grid columns.  When
+            provided, an expander chevron column is added.  ``None``
+            disables the feature.
+        detail_height: Fixed pixel height for the detail row.  When
+            ``None``, auto-computed from the number of detail columns.
+        detail_labels: Optional ``{field: label}`` mapping for display
+            labels in the detail panel.  Falls back to the column's
+            ``headerName`` or the raw field name.
+        detail_badge_fields: Fields whose values are rendered as
+            pipe-delimited (``|``) colored badges instead of plain text.
+            Defaults to ``[]`` (no badge fields).
+        detail_badge_colors: Custom color mapping for badge text.
+            Keys are badge text strings, values are ``[fg_color, bg_color]``
+            pairs.  Falls back to the built-in heuristic color function.
         **extra_props: Additional props forwarded to ``data_grid()``.
 
     Returns:
@@ -976,6 +997,18 @@ def lazyframe_grid(
     """
     if on_row_click is None:
         on_row_click = state_cls.handle_lf_grid_row_click
+
+    detail_props: dict[str, Any] = {}
+    if detail_columns:
+        detail_props["detail_columns"] = detail_columns
+    if detail_height is not None:
+        detail_props["detail_height"] = detail_height
+    if detail_labels:
+        detail_props["detail_labels"] = detail_labels
+    if detail_badge_fields:
+        detail_props["detail_badge_fields"] = detail_badge_fields
+    if detail_badge_colors:
+        detail_props["detail_badge_colors"] = detail_badge_colors
 
     grid = data_grid(
         rows=state_cls.lf_grid_rows,
@@ -1010,6 +1043,7 @@ def lazyframe_grid(
         on_row_click=on_row_click,
         height=height,
         width=width,
+        **detail_props,
         **extra_props,
     )
 

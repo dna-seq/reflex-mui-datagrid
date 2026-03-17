@@ -126,6 +126,7 @@ app.add_page(index, on_load=State.load_data)
 - **Automatic dropdown filters** -- low-cardinality string columns and `Categorical`/`Enum` dtypes become `singleSelect` columns with dropdown filters
 - **JSON-safe serialization** -- temporal columns become ISO strings, `List` columns become comma-joined strings, `Struct` columns become strings
 - **`ColumnDef` model** with snake_case Python attrs that auto-convert to camelCase JS props
+- **Expandable row detail panels** -- click a chevron to reveal additional fields below any row, with configurable badge rendering and custom colors (uses MUI X virtualizer's `setPanels` API)
 - **Event handlers** for row click, cell click, sorting, filtering, pagination, and row selection
 - **Auto-sized container** -- `WrappedDataGrid` wraps the grid in a `<div>` with configurable `width`/`height`
 - **Row identification** -- `row_id_field` parameter for custom row ID, auto-generated `__row_id__` column when no `id` column exists
@@ -354,6 +355,69 @@ def my_page() -> rx.Component:
 | `show_description_in_header` | `bool` | `True` | Show column descriptions as subtitles |
 | `debug_log` | `bool` | `True` | Browser console debug logging |
 | `on_row_click` | `EventHandler \| None` | `None` | Override default row-click handler |
+| `detail_columns` | `list[str] \| None` | `None` | Fields to show in the expandable detail panel |
+| `detail_height` | `int \| None` | `None` | Fixed pixel height for the detail panel (auto-computed if `None`) |
+| `detail_labels` | `dict[str, str] \| None` | `None` | `{field: label}` display labels for detail panel fields |
+| `detail_badge_fields` | `list[str] \| None` | `None` | Fields rendered as pipe-delimited colored badges |
+| `detail_badge_colors` | `dict[str, list[str]] \| None` | `None` | Custom `{text: [fg, bg]}` badge colors |
+
+### Expandable Row Detail Panels
+
+The DataGrid supports expandable detail panels that show additional data below each row when clicked. This brings MUI X Pro's detail panel capability to the Community edition using the virtualizer's `setPanels` API.
+
+When `detail_columns` is provided, an expander chevron column appears. Clicking it reveals a panel below that row with the specified fields displayed as label-value pairs.
+
+```python
+data_grid(
+    rows=State.rows,
+    columns=State.columns,
+    detail_columns=["description", "notes", "tags"],
+    detail_labels={
+        "description": "Full Description",
+        "notes": "Internal Notes",
+        "tags": "Categories",
+    },
+    detail_height=180,
+    height="600px",
+)
+```
+
+**Badge fields** render pipe-delimited values (`"High | Urgent | Critical"`) as colored inline badges instead of plain text. The built-in color heuristic maps common terms (risk levels, quality tiers, percentiles) to semantic colors. You can override colors per badge text:
+
+```python
+data_grid(
+    rows=State.rows,
+    columns=State.columns,
+    detail_columns=["summary", "risk_hint", "notes"],
+    detail_badge_fields=["summary", "risk_hint"],
+    detail_badge_colors={
+        "High Risk": ["#c62828", "#ffcdd2"],
+        "Low Risk": ["#2e7d32", "#c8e6c9"],
+    },
+    height="600px",
+)
+```
+
+With `lazyframe_grid`, the same props are available:
+
+```python
+lazyframe_grid(
+    MyState,
+    detail_columns=["interpretation", "reference_source"],
+    detail_badge_fields=["interpretation"],
+    detail_labels={"interpretation": "Clinical Interpretation"},
+)
+```
+
+**Detail panel props reference:**
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `detail_columns` | `list[str]` | Field names to display in the detail panel. Can reference any key in the row data, not just visible grid columns. When provided, an expander chevron column is added. |
+| `detail_height` | `int` | Fixed pixel height for the panel. When omitted, auto-computed from the number of detail columns. |
+| `detail_labels` | `dict[str, str]` | `{field: label}` mapping for display labels. Falls back to the column's `headerName` or the raw field name. |
+| `detail_badge_fields` | `list[str]` | Fields whose values are split on `\|` and rendered as colored badges. |
+| `detail_badge_colors` | `dict[str, list[str]]` | Custom colors keyed by badge text. Each value is `[foreground_color, background_color]`. Unmatched text falls back to the built-in heuristic. |
 
 ### Multiple Independent Grids
 
@@ -387,12 +451,14 @@ uv sync
 uv run demo
 ```
 
-The demo has three tabs:
+The demo has five tabs:
 
 | Tab | Description |
 |-----|-------------|
+| **PRS Results** | Polygenic Risk Scores with expandable detail panels (colored badges, interpretation, percentiles) |
 | **Employee Data** | 20-row inline polars LazyFrame with sorting, dropdown filters, checkbox selection |
 | **Genomic Variants (VCF)** | 793 variants loaded via `polars_bio.scan_vcf()`, column descriptions from VCF headers |
+| **Longevity Map** | Server-side parquet browsing via `LazyFrameGridMixin` |
 | **Full Genome (Server-Side)** | ~4.5M variants with server-side scroll-loading, filtering, and sorting via `LazyFrameGridMixin` |
 
 ![Employee Data Grid](docs/screenshot_employee_data.jpg)
