@@ -515,7 +515,8 @@ function _buildGridProps(props, unlimitedMode) {
         const val = params.value;
         if (val == null) return "";
         const baseUrl = cfg.baseUrl || "";
-        const href = baseUrl ? baseUrl + val : val;
+        const suffixUrl = cfg.suffixUrl || "";
+        const href = baseUrl ? (baseUrl + val + suffixUrl) : (val + suffixUrl);
         const label = cfg.labelField ? params.row[cfg.labelField] : val;
         return React.createElement("a", {
           href, target: cfg.target || "_blank", rel: "noopener noreferrer",

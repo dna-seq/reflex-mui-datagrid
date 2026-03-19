@@ -122,7 +122,7 @@ app.add_page(index, on_load=State.load_data)
 - **No 100-row limit** -- the Community edition's artificial page-size cap is removed via a small JS patch; pass `pagination=True` to re-enable pagination with any page size
 - **`show_dataframe()` helper** -- one-liner to turn any polars DataFrame or LazyFrame into a fully-featured interactive grid
 - **Polars LazyFrame integration** -- `lazyframe_to_datagrid()` converts any LazyFrame to DataGrid-ready rows and column definitions in one call
-- **Automatic column type detection** -- polars dtypes map to DataGrid types (`number`, `boolean`, `date`, `dateTime`, `string`)
+- **Automatic column type detection** -- polars dtypes map to DataGrid types (`number`, `boolean`, `date`, `dateTime`, `string`) with sensible default widths per dtype (e.g. boolean 80px, numeric 110px, dates 140px, strings flex)
 - **Automatic dropdown filters** -- low-cardinality string columns and `Categorical`/`Enum` dtypes become `singleSelect` columns with dropdown filters
 - **JSON-safe serialization** -- temporal columns become ISO strings, `List` columns become comma-joined strings, `Struct` columns become strings
 - **`ColumnDef` model** with snake_case Python attrs that auto-convert to camelCase JS props
@@ -325,6 +325,78 @@ class MyState(LazyFrameGridMixin, rx.State):
 | `descriptions` | `dict[str, str] \| None` | `None` | Column descriptions for tooltips |
 | `chunk_size` | `int` | `200` | Rows per scroll chunk |
 | `value_options_max_unique` | `int` | `500` | Max distinct values for dropdown filter (queried from full dataset) |
+| `eager_value_options_row_limit` | `int` | `50000` | Row count threshold for eager value options computation |
+| `column_overrides` | `dict[str, dict[str, Any]] \| None` | `None` | Per-column property overrides (widths, renderers, etc.) |
+
+### Column Overrides
+
+The `column_overrides` parameter lets you customize auto-generated column definitions without reaching into internal cache. Overrides are applied before storing in the cache, so they survive all internal operations (value options computation, filter upgrades).
+
+Keys are field names, values are dicts of camelCase `ColumnDef` properties:
+
+```python
+class MyState(LazyFrameGridMixin, rx.State):
+    def load_data(self):
+        lf = pl.scan_parquet("pgs_scores.parquet")
+        yield from self.set_lazyframe(lf, column_overrides={
+            # Render PGS IDs as links to the PGS Catalog
+            "pgs_id": {
+                "width": 140,
+                "cellRendererType": "url",
+                "cellRendererConfig": {
+                    "baseUrl": "https://www.pgscatalog.org/score/",
+                    "suffixUrl": "/",
+                    "color": "#1565c0",
+                },
+            },
+            # Custom widths for numeric columns
+            "n_variants": {"width": 110},
+            # Flexible width for text columns
+            "trait_reported": {"minWidth": 150, "flex": 2},
+            # Hide internal columns
+            "ftp_link": {"hide": True},
+        })
+```
+
+Supported override properties include `width`, `minWidth`, `maxWidth`, `flex`, `hide`, `cellRendererType`, `cellRendererConfig`, `type`, `headerName`, and any other `ColumnDef` attribute in camelCase.
+
+### Cell Renderers
+
+Columns can use built-in cell renderers via `cellRendererType` and `cellRendererConfig`. These work both in `column_overrides` (for server-side grids) and in `ColumnDef` (for client-side grids).
+
+**URL renderer** (`cellRendererType: "url"`):
+
+| Config key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `baseUrl` | `str` | `""` | Prefix prepended to the cell value |
+| `suffixUrl` | `str` | `""` | Suffix appended after the cell value |
+| `labelField` | `str` | -- | Row field to use as link text (defaults to cell value) |
+| `target` | `str` | `"_blank"` | HTML `target` attribute |
+| `color` | `str` | `"inherit"` | CSS color for the link |
+
+The URL is constructed as `baseUrl + cellValue + suffixUrl`. For example, with `baseUrl: "https://www.ebi.ac.uk/gwas/variants/"` and a cell value of `rs2032563`, the link points to `https://www.ebi.ac.uk/gwas/variants/rs2032563`.
+
+**Badge renderer** (`cellRendererType: "badge"`):
+
+| Config key | Type | Description |
+|------------|------|-------------|
+| `color` | `str` | Default text color |
+| `bgColor` | `str` | Default background color |
+| `colorMap` | `dict` | `{value: color}` per-value text colors |
+| `bgColorMap` | `dict` | `{value: bgColor}` per-value background colors |
+| `borderRadius` | `str` | CSS border-radius (default `"16px"`) |
+| `padding` | `str` | CSS padding (default `"4px 8px"`) |
+
+**Progress bar renderer** (`cellRendererType: "progress_bar"`):
+
+| Config key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `minValue` | `number` | `0` | Minimum value for scaling |
+| `maxValue` | `number` | `100` | Maximum value for scaling |
+| `color` | `str` | `"#1976d2"` | Bar fill color |
+| `trackColor` | `str` | `"#e0e0e0"` | Track background color |
+| `height` | `str` | `"8px"` | Bar height |
+| `showValue` | `bool` | `true` | Show numeric value next to bar |
 
 ### `lazyframe_grid` -- Pre-Wired UI Component
 
@@ -451,14 +523,15 @@ uv sync
 uv run demo
 ```
 
-The demo has five tabs:
+The demo has six tabs:
 
 | Tab | Description |
 |-----|-------------|
 | **PRS Results** | Polygenic Risk Scores with expandable detail panels (colored badges, interpretation, percentiles) |
+| **PRS (Lazy + Overrides)** | Same PRS data via `LazyFrameGridMixin` with `column_overrides` -- PGS IDs as clickable links to the PGS Catalog, custom column widths |
 | **Employee Data** | 20-row inline polars LazyFrame with sorting, dropdown filters, checkbox selection |
 | **Genomic Variants (VCF)** | 793 variants loaded via `polars_bio.scan_vcf()`, column descriptions from VCF headers |
-| **Longevity Map** | Server-side parquet browsing via `LazyFrameGridMixin` |
+| **Longevity Map** | Server-side parquet browsing via `LazyFrameGridMixin`, rsIDs linked to GWAS Catalog |
 | **Full Genome (Server-Side)** | ~4.5M variants with server-side scroll-loading, filtering, and sorting via `LazyFrameGridMixin` |
 
 ![Employee Data Grid](docs/screenshot_employee_data.jpg)

@@ -146,7 +146,75 @@ col = ColumnDef(
 | `value_formatter` | `rx.Var \| None` | `None` | JS expression to format cell display values. |
 | `cell_class_name` | `str \| None` | `None` | CSS class name for cells in this column. |
 | `render_cell` | `rx.Var \| None` | `None` | Custom JS cell renderer. |
+| `cell_renderer_type` | `str \| None` | `None` | Built-in renderer: `"url"`, `"badge"`, or `"progress_bar"`. |
+| `cell_renderer_config` | `dict[str, Any] \| None` | `None` | Configuration for the built-in renderer. |
 | `disable_column_menu` | `bool` | `False` | Disable the column menu (three-dot icon). |
+
+### Built-in Cell Renderers
+
+Columns support built-in renderers via `cell_renderer_type` and `cell_renderer_config` (or via `column_overrides` using the camelCase equivalents `cellRendererType` / `cellRendererConfig`).
+
+#### `UrlCellRenderer`
+
+Renders cells as clickable `<a>` links. Can also be used as an `rx.Var` for static column definitions.
+
+```python
+from reflex_mui_datagrid import UrlCellRenderer
+
+col = ColumnDef(
+    field="rsid",
+    render_cell=UrlCellRenderer(
+        base_url="https://www.ebi.ac.uk/gwas/variants/",
+        color="#1565c0",
+    ),
+)
+
+# With suffix_url for trailing path segments:
+col = ColumnDef(
+    field="pgs_id",
+    render_cell=UrlCellRenderer(
+        base_url="https://www.pgscatalog.org/score/",
+        suffix_url="/",
+        color="#1565c0",
+    ),
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `base_url` | `str` | `""` | URL prefix prepended to the cell value. |
+| `suffix_url` | `str` | `""` | URL suffix appended after the cell value. |
+| `label_field` | `str \| None` | `None` | Row field to use as link text (defaults to cell value). |
+| `target` | `str` | `"_blank"` | HTML `target` attribute. |
+| `color` | `str` | `"inherit"` | CSS color for the link. |
+
+The href is constructed as `base_url + cell_value + suffix_url`. When using `cellRendererConfig` (e.g. in `column_overrides`), the equivalent keys are `baseUrl`, `suffixUrl`, `labelField`, `target`, and `color`.
+
+#### `BadgeCellRenderer`
+
+Renders cells as colored pill badges.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `color` | `str \| None` | `None` | Default text color. |
+| `bg_color` | `str \| None` | `None` | Default background color. |
+| `color_map` | `dict \| None` | `None` | `{value: color}` per-value text colors. |
+| `bg_color_map` | `dict \| None` | `None` | `{value: bg_color}` per-value background colors. |
+| `border_radius` | `str` | `"16px"` | CSS border-radius. |
+| `padding` | `str` | `"4px 8px"` | CSS padding. |
+
+#### `ProgressBarCellRenderer`
+
+Renders numeric cells as horizontal progress bars.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `min_value` | `float` | `0.0` | Minimum value for scaling. |
+| `max_value` | `float` | `100.0` | Maximum value for scaling. |
+| `color` | `str` | `"#1976d2"` | Bar fill color. |
+| `track_color` | `str` | `"#e0e0e0"` | Track background color. |
+| `height` | `str` | `"8px"` | Bar height. |
+| `show_value` | `bool` | `True` | Show numeric value next to bar. |
 
 ---
 
@@ -177,14 +245,14 @@ rows, col_defs = lazyframe_to_datagrid(lf)
 **Automatic behavior:**
 
 - **Row ID**: If no `id` column and no `id_field` specified, a `__row_id__` column with zero-based index is added. The ID column is hidden from the visible grid by default.
-- **Column types**: Polars dtypes are mapped to DataGrid types:
-  - `Int*/UInt*/Float*/Decimal` -> `"number"`
-  - `Boolean` -> `"boolean"`
-  - `Date` -> `"date"`
-  - `Datetime` -> `"dateTime"`
-  - `Categorical`/`Enum` -> `"singleSelect"` (always, with distinct values as options)
-  - `String` -> `"singleSelect"` if low-cardinality, else `"string"`
-  - Everything else -> `"string"`
+- **Column types**: Polars dtypes are mapped to DataGrid types with sensible default widths:
+  - `Boolean` -> `"boolean"`, width 80px
+  - `Int*/UInt*/Float*/Decimal` -> `"number"`, width 110px
+  - `Date` -> `"date"`, width 140px
+  - `Datetime` -> `"dateTime"`, width 160px
+  - `Categorical`/`Enum` -> `"singleSelect"` (always, with distinct values as options), flex 1
+  - `String` -> `"singleSelect"` if low-cardinality, else `"string"`, flex 1
+  - Everything else -> `"string"`, flex 1
 - **JSON safety**: Temporal columns become ISO strings, `List` columns become comma-joined strings, `Struct` columns become strings.
 - **Header names**: snake_case field names are humanized (`first_name` -> `"First Name"`).
 
@@ -363,7 +431,7 @@ class GridB(LazyFrameGridMixin, rx.State):
 | `lf_grid_selected_info` | `str` | `"Click a row to see details."` | Detail string for clicked row. |
 | `lf_grid_pagination_model` | `dict[str, int]` | `{"page": 0, "pageSize": 200}` | Current pagination state. |
 
-**`set_lazyframe(lf, descriptions, chunk_size, value_options_max_unique)`**
+**`set_lazyframe(lf, descriptions, chunk_size, value_options_max_unique, eager_value_options_row_limit, column_overrides)`**
 
 Prepare a LazyFrame for server-side browsing. This is a **generator** -- use `yield from self.set_lazyframe(...)` so the loading state is sent to the frontend immediately.
 
@@ -375,6 +443,26 @@ Low-cardinality string columns get a `singleSelect` dropdown populated from the 
 | `descriptions` | `dict[str, str] \| None` | `None` | Column descriptions for tooltips/subtitles. |
 | `chunk_size` | `int` | `200` | Rows per scroll chunk. |
 | `value_options_max_unique` | `int` | `500` | Max distinct values for a column to get a dropdown filter. Queried from the full LazyFrame so the dropdown is always complete. |
+| `eager_value_options_row_limit` | `int` | `50000` | Row count threshold below which value options are computed eagerly at init. Set to `0` to always defer. |
+| `column_overrides` | `dict[str, dict[str, Any]] \| None` | `None` | Per-column property overrides merged into auto-generated column defs. Keys are field names, values are dicts of camelCase ColumnDef properties (e.g. `width`, `flex`, `cellRendererType`, `cellRendererConfig`, `hide`). Applied before caching, so overrides survive value options computation and filter upgrades. |
+
+**Column overrides example:**
+
+```python
+yield from self.set_lazyframe(lf, column_overrides={
+    "rsid": {
+        "width": 140,
+        "cellRendererType": "url",
+        "cellRendererConfig": {
+            "baseUrl": "https://www.ebi.ac.uk/gwas/variants/",
+            "color": "#1565c0",
+        },
+    },
+    "trait": {"minWidth": 150, "flex": 2},
+    "score": {"width": 110},
+    "internal_notes": {"hide": True},
+})
+```
 
 **Event handlers** (auto-wired by `lazyframe_grid`):
 

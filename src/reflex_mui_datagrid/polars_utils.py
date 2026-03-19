@@ -49,6 +49,19 @@ def _is_categorical_dtype(dtype: pl.DataType) -> bool:
     return isinstance(dtype, (pl.Categorical, pl.Enum))
 
 
+def _default_width_flex(dtype: pl.DataType) -> tuple[int | None, int | None]:
+    """Return sensible (width, flex) defaults based on polars dtype."""
+    if isinstance(dtype, pl.Boolean):
+        return 80, None
+    if isinstance(dtype, pl.Date):
+        return 140, None
+    if isinstance(dtype, pl.Datetime):
+        return 160, None
+    if dtype.is_numeric():
+        return 110, None
+    return None, 1
+
+
 def _col_to_str_expr(col: pl.Expr, dtype: pl.DataType) -> pl.Expr:
     """Convert a column expression to a String, handling List/Struct types.
 
@@ -189,10 +202,13 @@ def lazyframe_to_datagrid(
         if column_descriptions is not None:
             description = column_descriptions.get(col_name)
 
+        width, flex = _default_width_flex(dtype)
         col_def = ColumnDef(
             field=col_name,
             header_name=_humanize_field_name(col_name),
             type=grid_type,
+            width=width,
+            flex=flex,
             value_options=value_options,
             description=description,
         )
@@ -262,10 +278,13 @@ def build_column_defs_from_schema(
         if column_descriptions is not None:
             description = column_descriptions.get(col_name)
 
+        width, flex = _default_width_flex(dtype)
         col_def = ColumnDef(
             field=col_name,
             header_name=_humanize_field_name(col_name),
             type=grid_type,
+            width=width,
+            flex=flex,
             value_options=value_options,
             description=description,
         )

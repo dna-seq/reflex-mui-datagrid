@@ -18,6 +18,8 @@ class UrlCellRenderer(rx.Var):
         base_url: Optional URL prefix.  The cell value (``params.value``)
             is appended to form the full href.  Leave empty when the cell
             already contains the full URL.
+        suffix_url: Optional URL suffix appended after the cell value.
+            Useful for URLs like ``https://example.com/items/{value}/details``.
         label_field: Name of another column in the row to use as the visible
             link text (accessed via ``params.row.<label_field>``).  When
             ``None`` (default) the cell value itself is shown.
@@ -29,11 +31,15 @@ class UrlCellRenderer(rx.Var):
     def __new__(
         cls,
         base_url: str = "",
+        suffix_url: str = "",
         label_field: str | None = None,
         target: str = "_blank",
         color: str = "inherit",
     ) -> "UrlCellRenderer":
-        href_expr = f"'{base_url}' + params.value" if base_url else "params.value"
+        if base_url or suffix_url:
+            href_expr = f"'{base_url}' + params.value + '{suffix_url}'"
+        else:
+            href_expr = "params.value"
         label_expr = f"params.row.{label_field}" if label_field else "params.value"
         js_expr = (
             f"(params) => React.createElement('a', "
@@ -49,6 +55,7 @@ class UrlCellRenderer(rx.Var):
     def __init__(
         self,
         base_url: str = "",
+        suffix_url: str = "",
         label_field: str | None = None,
         target: str = "_blank",
         color: str = "inherit",

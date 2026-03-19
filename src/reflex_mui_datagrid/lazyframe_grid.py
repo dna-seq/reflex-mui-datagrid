@@ -329,6 +329,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
         value_options_max_unique: int = _DEFAULT_VALUE_OPTIONS_MAX_UNIQUE,
         eager_value_options_row_limit: int = _DEFAULT_EAGER_VALUE_OPTIONS_ROW_LIMIT,
+        column_overrides: dict[str, dict[str, Any]] | None = None,
     ):
         """Prepare a LazyFrame for server-side browsing.
 
@@ -362,6 +363,13 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             eager_value_options_row_limit: Row count threshold below
                 which value options are computed eagerly at init for all
                 string-like columns.  Set to ``0`` to always defer.
+            column_overrides: Optional ``{field: {prop: value}}`` mapping
+                to merge into auto-generated column definitions.  Keys
+                are field names, values are dicts of camelCase ColumnDef
+                properties (e.g. ``width``, ``flex``, ``cellRendererType``,
+                ``cellRendererConfig``, ``hide``).  Overrides are applied
+                before storing in the cache, so they survive all internal
+                operations (value options computation, filter upgrades).
         """
         self.lf_grid_loading = True  # type: ignore[assignment]
         self.lf_grid_selected_info = "Preparing LazyFrame..."  # type: ignore[assignment]
@@ -386,6 +394,12 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             column_descriptions=cache.descriptions,
         )
         cache.col_defs = [c.dict() for c in col_defs]
+
+        if column_overrides:
+            for i, col in enumerate(cache.col_defs):
+                field = col.get("field", "")
+                if field in column_overrides:
+                    cache.col_defs[i] = {**col, **column_overrides[field]}
 
         self.lf_grid_columns = cache.col_defs  # type: ignore[assignment]
         self.lf_grid_loaded = True  # type: ignore[assignment]

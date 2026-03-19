@@ -1,16 +1,20 @@
 """Example Reflex app demonstrating the MUI X DataGrid wrapper.
 
-Four tabs:
-  1. Employee data -- small client-side scrollable grid (no pagination).
-  2. Genomic Variants (VCF) -- small client-side VCF grid with
+Six tabs:
+  1. PRS Results -- client-side PRS grid with detail panels and badges.
+  2. PRS (Lazy + Overrides) -- same PRS data via ``LazyFrameGridMixin``
+     with ``column_overrides`` demonstrating URL cell rendering
+     (PGS Catalog links with ``suffixUrl``) and custom column widths.
+  3. Employee Data -- small client-side scrollable grid (no pagination).
+  4. Genomic Variants (VCF) -- small client-side VCF grid with
      auto-extracted column descriptions.
-  3. Longevity Map (Parquet) -- **server-side** lazy grid loaded from
+  5. Longevity Map (Parquet) -- **server-side** lazy grid loaded from
      HuggingFace via ``hf://``.  Uses ``LazyFrameGridMixin`` for
      server-side filtering, sorting, and scroll-loading.
-  4. Full Genome (Server-Side) -- ~4.5 M row whole-genome VCF with
+  6. Full Genome (Server-Side) -- ~4.5 M row whole-genome VCF with
      server-side scroll-loading via a second ``LazyFrameGridMixin``.
 
-Tabs 3 and 4 each use their own ``LazyFrameGridMixin`` substate so
+Tabs 2, 5, and 6 each use their own ``LazyFrameGridMixin`` substate so
 they get independent ``lf_grid_*`` state vars and caches.
 """
 
@@ -307,6 +311,47 @@ def _build_employee_lazyframe() -> pl.LazyFrame:
 # ---------------------------------------------------------------------------
 
 
+class PrsLazyState(LazyFrameGridMixin, rx.State):
+    """Server-side lazy grid for PRS data, demonstrating column_overrides.
+
+    Uses ``column_overrides`` to render PGS IDs as clickable links to the
+    PGS Catalog (``https://www.pgscatalog.org/score/{pgs_id}/``) and
+    customise column widths.
+    """
+
+    prs_lazy_loaded: bool = False
+
+    def load_prs_lazy(self):
+        """Build the PRS LazyFrame and load with column_overrides."""
+        lf = _build_prs_lazyframe()
+        yield from self.set_lazyframe(
+            lf,
+            chunk_size=50,
+            column_overrides={
+                "PGS ID": {
+                    "width": 140,
+                    "cellRendererType": "url",
+                    "cellRendererConfig": {
+                        "baseUrl": "https://www.pgscatalog.org/score/",
+                        "suffixUrl": "/",
+                        "color": "#1565c0",
+                    },
+                },
+                "Trait": {"minWidth": 180, "flex": 2},
+                "PRS Score": {"width": 110},
+                "Percentile": {"width": 110},
+                "AUROC": {"width": 100},
+                "Quality": {"width": 100},
+                "Match Rate": {"width": 120},
+                "risk_hint": {"hide": True},
+                "interpretation": {"hide": True},
+                "estimated_percentile": {"hide": True},
+                "reference_source": {"hide": True},
+            },
+        )
+        self.prs_lazy_loaded = True  # type: ignore[assignment]
+
+
 class ParquetState(LazyFrameGridMixin, rx.State):
     """Server-side lazy grid for the Longevity Map parquet dataset.
 
@@ -324,7 +369,19 @@ class ParquetState(LazyFrameGridMixin, rx.State):
         yield
 
         lf = pl.scan_parquet(PARQUET_HF_URL)
-        yield from self.set_lazyframe(lf)
+        yield from self.set_lazyframe(
+            lf,
+            column_overrides={
+                "rsid": {
+                    "width": 140,
+                    "cellRendererType": "url",
+                    "cellRendererConfig": {
+                        "baseUrl": "https://www.ebi.ac.uk/gwas/variants/",
+                        "color": "#1565c0",
+                    },
+                },
+            },
+        )
         self.pq_loaded = True  # type: ignore[assignment]
         self.pq_loading_init = False  # type: ignore[assignment]
 
@@ -596,6 +653,53 @@ def prs_tab() -> rx.Component:
     )
 
 
+def prs_lazy_tab() -> rx.Component:
+    """PRS data via LazyFrameGridMixin with column_overrides demo."""
+    return rx.box(
+        rx.text(
+            "Same PRS data as the first tab, but loaded via ",
+            rx.code("LazyFrameGridMixin.set_lazyframe()"),
+            " with ",
+            rx.code("column_overrides"),
+            ". PGS IDs are rendered as clickable links to the ",
+            rx.link("PGS Catalog", href="https://www.pgscatalog.org/"),
+            " using ",
+            rx.code("cellRendererType: 'url'"),
+            " with ",
+            rx.code("baseUrl"),
+            " and ",
+            rx.code("suffixUrl: '/'"),
+            ". Column widths are customised per dtype.",
+            margin_bottom="1em",
+            color="var(--gray-11)",
+        ),
+        rx.cond(
+            PrsLazyState.prs_lazy_loaded,
+            rx.fragment(
+                lazyframe_grid_stats_bar(PrsLazyState),
+                lazyframe_grid(PrsLazyState, height="540px"),
+            ),
+            rx.box(
+                rx.button(
+                    "Load PRS Data (Lazy)",
+                    on_click=PrsLazyState.load_prs_lazy,
+                    loading=PrsLazyState.lf_grid_loading,
+                    size="3",
+                ),
+                rx.text(
+                    "Click to load the PRS dataset with column_overrides "
+                    "demonstrating URL rendering and custom widths.",
+                    size="2",
+                    color="var(--gray-9)",
+                    margin_top="0.5em",
+                ),
+            ),
+        ),
+        lazyframe_grid_detail_box(PrsLazyState),
+        padding_top="1em",
+    )
+
+
 def employee_tab() -> rx.Component:
     """Employee data tab content."""
     return rx.box(
@@ -814,12 +918,14 @@ def index() -> rx.Component:
         rx.tabs.root(
             rx.tabs.list(
                 rx.tabs.trigger("PRS Results", value="prs"),
+                rx.tabs.trigger("PRS (Lazy + Overrides)", value="prs_lazy"),
                 rx.tabs.trigger("Employee Data", value="employees"),
                 rx.tabs.trigger("Genomic Variants (VCF)", value="vcf"),
                 rx.tabs.trigger("Longevity Map (Parquet)", value="parquet"),
                 rx.tabs.trigger("Full Genome (Server-Side)", value="genome"),
             ),
             rx.tabs.content(prs_tab(), value="prs"),
+            rx.tabs.content(prs_lazy_tab(), value="prs_lazy"),
             rx.tabs.content(employee_tab(), value="employees"),
             rx.tabs.content(vcf_tab(), value="vcf"),
             rx.tabs.content(parquet_tab(), value="parquet"),
