@@ -145,6 +145,8 @@ try {
   }
 } catch (_e) { /* import unavailable — handled by Error Boundary */ }
 
+const _muiDefaultTheme = createTheme_();
+
 // ---------------------------------------------------------------------------
 // 2. Error Boundary: graceful degradation when the patch does not take
 //    effect (e.g. future MUI version removes GridSignature export).
@@ -1097,16 +1099,24 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
       return React.createElement(MuiDataGrid_, { ...safeProps, ref });
     };
     return React.createElement(
-      "div",
-      { ref: containerRef, style: { width: "100%", height: "100%" } },
-      React.createElement(_DataGridGuard, { fallback: fallback }, grid)
+      MuiThemeProvider_,
+      { theme: _muiDefaultTheme },
+      React.createElement(
+        "div",
+        { ref: containerRef, style: { width: "100%", height: "100%" } },
+        React.createElement(_DataGridGuard, { fallback: fallback }, grid)
+      )
     );
   }
 
   return React.createElement(
-    "div",
-    { ref: containerRef, style: { width: "100%", height: "100%" } },
-    grid
+    MuiThemeProvider_,
+    { theme: _muiDefaultTheme },
+    React.createElement(
+      "div",
+      { ref: containerRef, style: { width: "100%", height: "100%" } },
+      grid
+    )
   );
 });
 UnlimitedDataGrid.displayName = "UnlimitedDataGrid";
@@ -1185,6 +1195,10 @@ class DataGrid(rx.Component):
                     alias="GridFilterPanel_",
                     install=False,
                 ),
+            ],
+            "@mui/material": [
+                rx.ImportVar(tag="createTheme", alias="createTheme_"),
+                rx.ImportVar(tag="ThemeProvider", alias="MuiThemeProvider_"),
             ],
             "react": [rx.ImportVar(tag="React", is_default=True)],
         }
