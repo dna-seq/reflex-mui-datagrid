@@ -7,15 +7,11 @@ Reflex wrapper for the [MUI X DataGrid](https://mui.com/x/react-data-grid/) (v8)
 [![Downloads](https://img.shields.io/pypi/dm/reflex-mui-datagrid?logo=pypi&logoColor=white)](https://pypi.org/project/reflex-mui-datagrid/)
 [![GitHub](https://img.shields.io/badge/GitHub-dna--seq%2Freflex--mui--datagrid-181717?logo=github)](https://github.com/dna-seq/reflex-mui-datagrid)
 
-![Genomic Variants DataGrid](docs/screenshot_genomic_variants.jpg)
-
 ## Installation
 
 ```bash
 uv add reflex-mui-datagrid
 ```
-
-For CLI usage, you can run the tool as `biogrid` (see CLI section below).
 
 For genomic data support (VCF/BAM files), install with the `[bio]` extra:
 
@@ -24,42 +20,6 @@ uv add "reflex-mui-datagrid[bio]"
 ```
 
 Requires Python >= 3.12, Reflex >= 0.8.27, and polars >= 1.0.
-
-## CLI VCF Viewer (No Boilerplate)
-
-The package includes a CLI entrypoint that can launch an interactive viewer
-for VCF and other tabular formats. This is the fastest way to explore a VCF
-without writing any app code.
-
-Install as a global `uv` tool (with genomic support):
-
-```bash
-uv tool install "reflex-mui-datagrid[bio]"
-```
-
-This installs both commands:
-- `reflex-mui-datagrid` (full name)
-- `biogrid` (bio-focused alias)
-
-Open a VCF in your browser:
-
-```bash
-reflex-mui-datagrid path/to/variants.vcf
-# bio-focused alias
-biogrid path/to/variants.vcf
-```
-
-Useful options:
-
-```bash
-reflex-mui-datagrid path/to/variants.vcf --limit 5000 --port 3005 --title "Tumor Cohort VCF"
-# bio-focused alias
-biogrid path/to/variants.vcf --limit 5000 --port 3005 --title "Tumor Cohort VCF"
-```
-
-The CLI auto-detects file formats by extension and currently supports:
-- Genomics (via `polars-bio`): `vcf`, `bam`, `gff`, `bed`, `fasta`, `fastq`
-- Tabular: `csv`, `tsv`, `parquet`, `json`, `ndjson`, `ipc`/`arrow`/`feather`
 
 ## Quick Start
 
@@ -115,22 +75,6 @@ app = rx.App()
 app.add_page(index, on_load=State.load_data)
 ```
 
-## Core Features
-
-- **MUI X DataGrid v8** (Community edition, MIT) with `@mui/material` v7
-- **No pagination by default** -- all rows are scrollable; MUI's built-in row virtualisation only renders visible DOM rows, keeping scrolling smooth for large datasets
-- **No 100-row limit** -- the Community edition's artificial page-size cap is removed via a small JS patch; pass `pagination=True` to re-enable pagination with any page size
-- **`show_dataframe()` helper** -- one-liner to turn any polars DataFrame or LazyFrame into a fully-featured interactive grid
-- **Polars LazyFrame integration** -- `lazyframe_to_datagrid()` converts any LazyFrame to DataGrid-ready rows and column definitions in one call
-- **Automatic column type detection** -- polars dtypes map to DataGrid types (`number`, `boolean`, `date`, `dateTime`, `string`) with sensible default widths per dtype (e.g. boolean 80px, numeric 110px, dates 140px, strings flex)
-- **Automatic dropdown filters** -- low-cardinality string columns and `Categorical`/`Enum` dtypes become `singleSelect` columns with dropdown filters
-- **JSON-safe serialization** -- temporal columns become ISO strings, `List` columns become comma-joined strings, `Struct` columns become strings
-- **`ColumnDef` model** with snake_case Python attrs that auto-convert to camelCase JS props
-- **Expandable row detail panels** -- click a chevron to reveal additional fields below any row, with configurable badge rendering and custom colors (uses MUI X virtualizer's `setPanels` API)
-- **Event handlers** for row click, cell click, sorting, filtering, pagination, and row selection
-- **Auto-sized container** -- `WrappedDataGrid` wraps the grid in a `<div>` with configurable `width`/`height`
-- **Row identification** -- `row_id_field` parameter for custom row ID, auto-generated `__row_id__` column when no `id` column exists
-
 ## The `show_dataframe` Helper
 
 `show_dataframe` is designed for polars users who want to quickly visualize a DataFrame without wiring up Reflex state. It accepts a `pl.DataFrame` or `pl.LazyFrame` and returns a ready-to-render component:
@@ -175,81 +119,16 @@ grid = show_dataframe(
 - Use `show_dataframe` for quick prototyping, static dashboards, or when you just want to see your data.
 - Use `lazyframe_to_datagrid` inside `rx.State` when the grid data needs to change in response to user actions (filtering server-side, loading different files, etc.).
 
-## Genomic Data Visualization
+## What You Get
 
-[polars-bio](https://biodatageeks.org/polars-bio/) is a bioinformatics library that reads genomic file formats (VCF, BAM, GFF, FASTA, FASTQ, and more) as native polars LazyFrames. Since `show_dataframe` accepts any polars LazyFrame, you get an interactive genomic data browser in two lines of code -- no boilerplate needed.
-
-![Genomic Variants Grid](docs/screenshot_genomic_variants.jpg)
-
-### Extra Dependencies
-
-Install with the `[bio]` extra to pull in polars-bio:
-
-```bash
-uv add "reflex-mui-datagrid[bio]"
-```
-
-This adds [polars-bio](https://pypi.org/project/polars-bio/) >= 0.23.0, which provides `scan_vcf()`, `scan_bam()`, `scan_gff()`, and other genomic file readers -- all returning standard polars LazyFrames.
-
-If you only want quick interactive exploration, the CLI is the simplest option:
-
-```bash
-reflex-mui-datagrid variants.vcf
-```
-
-### Quick VCF Visualization (two lines)
-
-Because `polars_bio.scan_vcf()` returns a polars LazyFrame, you can pass it straight to `show_dataframe`:
-
-```python
-import polars_bio as pb
-from reflex_mui_datagrid import show_dataframe
-
-lf = pb.scan_vcf("variants.vcf")  # polars LazyFrame
-
-def index() -> rx.Component:
-    return show_dataframe(lf, density="compact", height="540px")
-```
-
-That is all you need -- column types, dropdown filters for low-cardinality fields like `filter` and genotype, row IDs, and the MUI toolbar are all set up automatically.
-
-### VCF with Column Descriptions from Headers
-
-For richer display, `bio_lazyframe_to_datagrid` automatically extracts column descriptions from VCF INFO/FORMAT headers and shows them as tooltips or subtitles in the column headers:
-
-```python
-import polars_bio as pb
-import reflex as rx
-from reflex_mui_datagrid import bio_lazyframe_to_datagrid, data_grid
-
-class State(rx.State):
-    rows: list[dict] = []
-    columns: list[dict] = []
-
-    def load_vcf(self) -> None:
-        lf = pb.scan_vcf("variants.vcf")
-        self.rows, col_defs = bio_lazyframe_to_datagrid(lf)
-        self.columns = [c.dict() for c in col_defs]
-
-def index() -> rx.Component:
-    return data_grid(
-        rows=State.rows,
-        columns=State.columns,
-        show_toolbar=True,
-        show_description_in_header=True,  # VCF descriptions as subtitles
-        density="compact",
-        column_header_height=70,
-        height="540px",
-    )
-
-app = rx.App()
-app.add_page(index, on_load=State.load_vcf)
-```
-
-`bio_lazyframe_to_datagrid` merges three sources of column descriptions:
-1. **VCF specification** -- standard fields (chrom, start, ref, alt, qual, filter, etc.)
-2. **INFO fields** -- descriptions from the file's `##INFO` header lines
-3. **FORMAT fields** -- descriptions from the file's `##FORMAT` header lines
+- **MUI X DataGrid v8** (Community edition, MIT) with `@mui/material` v7
+- **`show_dataframe()` helper** -- one-liner to turn any polars DataFrame or LazyFrame into a fully-featured interactive grid
+- **Polars LazyFrame integration** -- `lazyframe_to_datagrid()` converts any LazyFrame to DataGrid-ready rows and column definitions in one call
+- **Automatic column type detection** -- polars dtypes map to DataGrid types (`number`, `boolean`, `date`, `dateTime`, `string`) with sensible default widths
+- **Automatic dropdown filters** -- low-cardinality string columns and `Categorical`/`Enum` dtypes become `singleSelect` columns with dropdown filters
+- **JSON-safe serialization** -- temporal columns become ISO strings, `List` columns become comma-joined strings, `Struct` columns become strings
+- **Column, row, and selection events** -- handlers for row click, cell click, sorting, filtering, pagination, and row selection
+- **Expandable row detail panels** -- click a chevron to reveal additional fields below any row, with configurable badge rendering and custom colors
 
 ## Server-Side Scroll-Loading (Large Datasets)
 
@@ -425,6 +304,8 @@ def my_page() -> rx.Component:
 | `scroll_end_threshold` | `int` | `260` | Pixels from bottom to trigger next chunk |
 | `show_toolbar` | `bool` | `True` | Show MUI toolbar |
 | `show_description_in_header` | `bool` | `True` | Show column descriptions as subtitles |
+| `show_filter_panel` | `bool` | `True` | Show the filter panel below the grid, including active filter summary and clear-all controls |
+| `show_filter_presets` | `bool` | `True` | Show JSON preset copy/download/upload controls inside the filter panel |
 | `debug_log` | `bool` | `True` | Browser console debug logging |
 | `on_row_click` | `EventHandler \| None` | `None` | Override default row-click handler |
 | `detail_columns` | `list[str] \| None` | `None` | Fields to show in the expandable detail panel |
@@ -432,6 +313,20 @@ def my_page() -> rx.Component:
 | `detail_labels` | `dict[str, str] \| None` | `None` | `{field: label}` display labels for detail panel fields |
 | `detail_badge_fields` | `list[str] \| None` | `None` | Fields rendered as pipe-delimited colored badges |
 | `detail_badge_colors` | `dict[str, list[str]] \| None` | `None` | Custom `{text: [fg, bg]}` badge colors |
+
+By default, `lazyframe_grid` renders a compact filter panel below the grid. It shows the active filter/sort summary, a Clear All button, and JSON preset controls for copying, downloading, or uploading saved filters.
+
+Hide the whole panel when you want only the grid UI:
+
+```python
+lazyframe_grid(MyState, show_filter_panel=False)
+```
+
+Keep the filter summary and Clear All button, but hide JSON saving/loading:
+
+```python
+lazyframe_grid(MyState, show_filter_presets=False)
+```
 
 ### Expandable Row Detail Panels
 
@@ -513,6 +408,111 @@ class CsvGrid(LazyFrameGridMixin, rx.State):
 2. Only the first chunk of rows is collected and sent to the frontend.
 3. As the user scrolls near the bottom, `handle_lf_grid_scroll_end` collects the next chunk and appends it.
 4. Filter and sort changes reset to page 0 and re-query the LazyFrame with Polars expressions -- no full-table collect.
+
+## Genomic Data Visualization
+
+[polars-bio](https://biodatageeks.org/polars-bio/) reads genomic file formats (VCF, BAM, GFF, FASTA, FASTQ, and more) as polars LazyFrames. Since `show_dataframe` accepts any polars LazyFrame, you can build an interactive genomic browser with the same API used for ordinary tables.
+
+![Genomic Variants Grid](docs/screenshot_genomic_variants.jpg)
+
+### Extra Dependencies
+
+Install with the `[bio]` extra to pull in polars-bio:
+
+```bash
+uv add "reflex-mui-datagrid[bio]"
+```
+
+This adds [polars-bio](https://pypi.org/project/polars-bio/) >= 0.23.0, which provides `scan_vcf()`, `scan_bam()`, `scan_gff()`, and other genomic file readers.
+
+### Quick VCF Visualization
+
+Because `polars_bio.scan_vcf()` returns a polars LazyFrame, you can pass it straight to `show_dataframe`:
+
+```python
+import polars_bio as pb
+import reflex as rx
+from reflex_mui_datagrid import show_dataframe
+
+lf = pb.scan_vcf("variants.vcf")
+
+def index() -> rx.Component:
+    return show_dataframe(lf, density="compact", height="540px")
+```
+
+That is all you need -- column types, dropdown filters for low-cardinality fields like `filter` and genotype, row IDs, and the MUI toolbar are all set up automatically.
+
+### VCF with Column Descriptions from Headers
+
+For richer display, `bio_lazyframe_to_datagrid` automatically extracts column descriptions from VCF INFO/FORMAT headers and shows them as tooltips or subtitles in the column headers:
+
+```python
+import polars_bio as pb
+import reflex as rx
+from reflex_mui_datagrid import bio_lazyframe_to_datagrid, data_grid
+
+class State(rx.State):
+    rows: list[dict] = []
+    columns: list[dict] = []
+
+    def load_vcf(self) -> None:
+        lf = pb.scan_vcf("variants.vcf")
+        self.rows, col_defs = bio_lazyframe_to_datagrid(lf)
+        self.columns = [c.dict() for c in col_defs]
+
+def index() -> rx.Component:
+    return data_grid(
+        rows=State.rows,
+        columns=State.columns,
+        show_toolbar=True,
+        show_description_in_header=True,  # VCF descriptions as subtitles
+        density="compact",
+        column_header_height=70,
+        height="540px",
+    )
+
+app = rx.App()
+app.add_page(index, on_load=State.load_vcf)
+```
+
+`bio_lazyframe_to_datagrid` merges three sources of column descriptions:
+1. **VCF specification** -- standard fields (chrom, start, ref, alt, qual, filter, etc.)
+2. **INFO fields** -- descriptions from the file's `##INFO` header lines
+3. **FORMAT fields** -- descriptions from the file's `##FORMAT` header lines
+
+## CLI Viewer
+
+The package includes a CLI entrypoint that can launch an interactive viewer for VCF and other tabular formats without writing any app code.
+
+Install as a global `uv` tool:
+
+```bash
+uv tool install "reflex-mui-datagrid[bio]"
+```
+
+This installs both commands:
+- `reflex-mui-datagrid` (full name)
+- `biogrid` (bio-focused alias)
+
+Open a file in your browser:
+
+```bash
+reflex-mui-datagrid path/to/variants.vcf
+# bio-focused alias
+biogrid path/to/variants.vcf
+```
+
+Useful options:
+
+```bash
+reflex-mui-datagrid path/to/variants.vcf --limit 5000 --port 3005 --title "Tumor Cohort VCF"
+# bio-focused alias
+biogrid path/to/variants.vcf --limit 5000 --port 3005 --title "Tumor Cohort VCF"
+```
+
+The CLI auto-detects file formats by extension and currently supports:
+- Genomics (via `polars-bio`): `vcf`, `bam`, `gff`, `bed`, `fasta`, `fastq`
+- Tabular: `csv`, `tsv`, `parquet`, `json`, `ndjson`, `ipc`/`arrow`/`feather`
 
 ## Running the Example
 

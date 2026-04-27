@@ -429,6 +429,11 @@ class GridB(LazyFrameGridMixin, rx.State):
 | `lf_grid_loaded` | `bool` | `False` | Whether data has been loaded. |
 | `lf_grid_stats` | `str` | `""` | Last refresh timing info. |
 | `lf_grid_selected_info` | `str` | `"Click a row to see details."` | Detail string for clicked row. |
+| `lf_grid_filter_debug` | `str` | `"No active filters or sorts."` | Compact active filter/sort summary displayed by the optional filter panel. |
+| `lf_grid_filter_preset_json` | `str` | `""` | Current filter/sort preset JSON used for copy/download when filters or sorts are active. |
+| `lf_grid_debug_expanded` | `bool` | `False` | Whether the optional filter panel is expanded to show the JSON preset controls. |
+| `lf_grid_filter_model` | `dict[str, Any]` | `{"items": []}` | Controlled MUI filter model synced with the server-side filter state. |
+| `lf_grid_active_filter_fields` | `list[str]` | `[]` | Fields with active filters, used to highlight column filter icons. |
 | `lf_grid_pagination_model` | `dict[str, int]` | `{"page": 0, "pageSize": 200}` | Current pagination state. |
 
 **`set_lazyframe(lf, descriptions, chunk_size, value_options_max_unique, eager_value_options_row_limit, column_overrides)`**
@@ -495,8 +500,28 @@ grid = lazyframe_grid(MyState, height="600px", density="compact")
 | `scroll_end_threshold` | `int` | `260` | Pixels from bottom to trigger next chunk. |
 | `show_toolbar` | `bool` | `True` | Show MUI toolbar. |
 | `show_description_in_header` | `bool` | `True` | Show column descriptions as subtitles. |
+| `show_filter_panel` | `bool` | `True` | Show the filter panel below the grid. The panel includes active filter/sort summary and clear-all controls. Set to `False` to hide the whole panel. |
+| `show_filter_presets` | `bool` | `True` | Show JSON preset copy/download/upload controls inside the filter panel. Set to `False` to keep the filter panel but hide JSON saving/loading UI. |
 | `debug_log` | `bool` | `True` | Browser console debug logging. |
 | `on_row_click` | `EventHandler \| None` | `None` | Override default row-click handler. |
+
+By default, `lazyframe_grid` includes the filter panel below the grid:
+
+```python
+lazyframe_grid(MyState)
+```
+
+Hide the whole panel:
+
+```python
+lazyframe_grid(MyState, show_filter_panel=False)
+```
+
+Keep the filter summary and Clear All button, but hide JSON saving/loading:
+
+```python
+lazyframe_grid(MyState, show_filter_presets=False)
+```
 
 ---
 

@@ -143,16 +143,22 @@ Never claim "tests would have caught this" without running the buggy code agains
 
 ## Learned User Preferences
 
-- **Never assume the user didn't rebuild**: When a fix doesn't appear to work in the browser, do not suggest the user forgot to rebuild or update the code. Investigate the actual problem instead.
+- **Never assume the user didn't rebuild**: When a fix doesn't appear to work in the browser, do not suggest the user forgot to rebuild or update the code. Investigate the actual problem instead, including stale compiled frontend output or multiple running demo servers.
 - **Trust user-provided DOM structure**: When the user provides DOM paths or structure from their browser, prefer that information over automated browser inspection which can be unreliable.
 - **Precise scope when removing code**: When asked to remove a specific feature, remove only what was asked. Do not remove adjacent related functionality unless explicitly requested.
 - **Extend the library rather than working around it**: If a feature exists in the TypeScript MUI DataGrid but not in the Reflex wrapper, extend the library to support it rather than building hacky workarounds.
 - **Provide demos for new features**: New features should be demonstrated in the existing demo app (e.g. genetic variants/PRS tab) rather than only documented.
 - **Never revert always-visible filter icons to MUI default**: The custom always-visible filter icon buttons in column headers are a core UX requirement. Never replace them with MUI's default hover-only behavior.
 - **Document failed hypotheses immediately**: When an approach fails, document it in the Failed Hypotheses section of AGENTS.md to prevent future agents from retrying the same approach.
+- **README ordering**: Keep the README focused on the most common library usage first, and move specialized workflows, genomic examples, demos, and deeper API material lower down.
 
 ## Learned Workspace Facts
 
 - **Demo app**: Run with `uv sync` then `uv run demo` from the project root. The demo uses `workspace = true` in `pyproject.toml` to depend on the local repo version.
 - **Filter JSON `id` field**: The `id` in MUI filter items is MUI-internal and should be stripped from filter JSON output sent to the user.
 - **Dynamic scrolling monkey-patching**: Dynamic scrolling with `pagination=False` originally used monkey-patching of MUI's pagination logic; this broke when Reflex switched from Next.js to Vite/ESM (CommonJS `require()` no longer available).
+- **MUI DataGrid package**: The wrapper imports bare `@mui/x-data-grid` and targets MUI X DataGrid Community v8, but this repo does not pin an exact npm patch/minor version; Reflex/npm resolves the installed version in `.web/node_modules`.
+- **Filter panel switches**: `lazyframe_grid(show_filter_panel=False)` hides the whole filter panel, while `show_filter_presets=False` keeps the filter summary and Clear All button but hides JSON upload/copy/download controls.
+- **Column overrides and URL suffixes**: `set_lazyframe(column_overrides=...)` applies overrides into `cache.col_defs` before syncing columns so lazy value-option updates preserve widths/renderers; URL renderers support `suffixUrl` / `suffix_url` for trailing path segments.
+- **Inline JS in Python strings**: Avoid unescaped JS regex sequences such as `\s`, `\d`, `\w`, or `\-` inside Python triple-quoted strings; use alternatives like `[ \t]`, place `-` at the end of character classes, or double-escape backslashes before compiling.
+- **Column autosizing pitfalls**: MUI `autosizeOnMount` and programmatic `apiRef.current.autosizeColumns()` were unreliable in the unlimited grid flow and can fight `minWidth`; avoid relying on them for readable lazy-grid column sizing.

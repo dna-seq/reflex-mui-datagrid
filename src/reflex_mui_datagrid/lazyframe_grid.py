@@ -951,6 +951,7 @@ def lazyframe_grid(
     show_toolbar: bool = True,
     show_description_in_header: bool = True,
     show_filter_panel: bool = True,
+    show_filter_presets: bool = True,
     debug_log: bool = True,
     on_row_click: Any = None,
     detail_columns: list[str] | None = None,
@@ -970,7 +971,9 @@ def lazyframe_grid(
     the active filters/sorts in human-readable form, the Filter JSON
     (copy-pasteable / downloadable), and buttons to upload a saved
     filter preset or clear all filters.  Pass
-    ``show_filter_panel=False`` to hide it.
+    ``show_filter_panel=False`` to hide the whole panel, or
+    ``show_filter_presets=False`` to keep the summary / Clear All UI
+    while hiding JSON copy/download/upload controls.
 
     Args:
         state_cls: The ``rx.State`` subclass that also inherits from
@@ -985,6 +988,8 @@ def lazyframe_grid(
         show_description_in_header: Show column descriptions as subtitles.
         show_filter_panel: Show the filter debug / Filter JSON panel
             below the grid.  Defaults to ``True``.
+        show_filter_presets: Show JSON preset copy/download/upload
+            controls in the filter panel.  Defaults to ``True``.
         debug_log: Enable browser console debug logging.
         on_row_click: Override the default row-click handler.  If ``None``,
             uses the mixin's ``handle_lf_grid_row_click``.
@@ -1066,7 +1071,10 @@ def lazyframe_grid(
 
     return rx.fragment(
         grid,
-        lazyframe_grid_filter_debug(state_cls),
+        lazyframe_grid_filter_debug(
+            state_cls,
+            show_presets=show_filter_presets,
+        ),
     )
 
 
@@ -1119,36 +1127,52 @@ def lazyframe_grid_stats_bar(state_cls: type) -> rx.Component:
     )
 
 
-def lazyframe_grid_filter_debug(state_cls: type) -> rx.Component:
+def lazyframe_grid_filter_debug(
+    state_cls: type,
+    *,
+    show_presets: bool = True,
+) -> rx.Component:
     """Return a collapsible debug panel showing active filters and sorts.
 
     The header bar is always visible and shows a compact one-line summary
-    plus Clear / Upload buttons.  Clicking the chevron expands the panel
-    to reveal the full Filter JSON (copy-pasteable / downloadable).
+    plus a Clear button.  When ``show_presets`` is enabled, it also shows
+    Upload controls and a chevron that expands the panel to reveal the
+    full Filter JSON (copy-pasteable / downloadable).
 
     Args:
         state_cls: The ``rx.State`` subclass that inherits from
             :class:`LazyFrameGridMixin`.
+        show_presets: Show JSON preset upload/copy/download controls.
 
     Returns:
         A Reflex component.
     """
     upload_id = f"preset_upload_{state_cls.__name__}"
 
-    header = rx.hstack(
-        rx.button(
-            rx.cond(
-                state_cls.lf_grid_debug_expanded,
-                rx.icon("chevron_down", size=14),
-                rx.icon("chevron_right", size=14),
-            ),
-            size="1",
-            variant="ghost",
-            color_scheme="orange",
-            on_click=state_cls.toggle_lf_grid_debug,
-            padding="2px",
+    header_children: list[Any] = []
+    if show_presets:
+        header_children.append(
+            rx.button(
+                rx.cond(
+                    state_cls.lf_grid_debug_expanded,
+                    rx.icon("chevron_down", size=14),
+                    rx.icon("chevron_right", size=14),
+                ),
+                size="1",
+                variant="ghost",
+                color_scheme="orange",
+                on_click=state_cls.toggle_lf_grid_debug,
+                padding="2px",
+            )
+        )
+
+    header_children.extend([
+        rx.hstack(
+            rx.icon("filter", size=14, color="var(--orange-9)"),
+            rx.text("Filters", size="1", weight="medium", color="var(--orange-11)"),
+            spacing="1",
+            align="center",
         ),
-        rx.icon("bug", size=14, color="var(--orange-9)"),
         rx.text(
             state_cls.lf_grid_filter_debug,
             size="1",
@@ -1160,24 +1184,31 @@ def lazyframe_grid_filter_debug(state_cls: type) -> rx.Component:
             min_width="0",
         ),
         rx.spacer(),
-        rx.upload(
-            rx.button(
-                rx.icon("upload", size=14),
-                "Upload",
-                size="1",
-                variant="outline",
-                color_scheme="blue",
-            ),
-            id=upload_id,
-            accept={".json": ["application/json"]},
-            max_files=1,
-            no_drag=True,
-            on_drop=state_cls.handle_lf_grid_preset_upload(  # type: ignore[attr-defined]
-                rx.upload_files(upload_id=upload_id)
-            ),
-            padding="0",
-            border="none",
-        ),
+    ])
+
+    if show_presets:
+        header_children.append(
+            rx.upload(
+                rx.button(
+                    rx.icon("upload", size=14),
+                    "Upload",
+                    size="1",
+                    variant="outline",
+                    color_scheme="blue",
+                ),
+                id=upload_id,
+                accept={".json": ["application/json"]},
+                max_files=1,
+                no_drag=True,
+                on_drop=state_cls.handle_lf_grid_preset_upload(  # type: ignore[attr-defined]
+                    rx.upload_files(upload_id=upload_id)
+                ),
+                padding="0",
+                border="none",
+            )
+        )
+
+    header_children.append(
         rx.button(
             rx.icon("x", size=14),
             "Clear All",
@@ -1185,56 +1216,68 @@ def lazyframe_grid_filter_debug(state_cls: type) -> rx.Component:
             variant="outline",
             color_scheme="orange",
             on_click=state_cls.clear_lf_grid_filters,
-        ),
+        )
+    )
+
+    header = rx.hstack(
+        *header_children,
         align="center",
         spacing="2",
         width="100%",
     )
 
-    expanded_content = rx.cond(
-        state_cls.lf_grid_debug_expanded,
-        rx.cond(
-            state_cls.lf_grid_filter_preset_json != "",
-            rx.box(
-                rx.hstack(
-                    rx.icon("braces", size=14, color="var(--orange-9)"),
-                    rx.text(
-                        "Filter JSON",
-                        size="1",
-                        weight="bold",
-                        color="var(--orange-11)",
+    expanded_content = rx.fragment()
+    if show_presets:
+        expanded_content = rx.cond(
+            state_cls.lf_grid_debug_expanded,
+            rx.cond(
+                state_cls.lf_grid_filter_preset_json != "",
+                rx.box(
+                    rx.hstack(
+                        rx.icon("braces", size=14, color="var(--orange-9)"),
+                        rx.text(
+                            "Filter JSON",
+                            size="1",
+                            weight="bold",
+                            color="var(--orange-11)",
+                        ),
+                        rx.spacer(),
+                        rx.button(
+                            rx.icon("clipboard_copy", size=12),
+                            "Copy",
+                            size="1",
+                            variant="ghost",
+                            color_scheme="orange",
+                            on_click=rx.set_clipboard(state_cls.lf_grid_filter_preset_json),  # type: ignore[arg-type]
+                        ),
+                        rx.button(
+                            rx.icon("download", size=12),
+                            "Download",
+                            size="1",
+                            variant="ghost",
+                            color_scheme="orange",
+                            on_click=state_cls.download_lf_grid_preset,
+                        ),
+                        align="center",
+                        spacing="2",
+                        width="100%",
                     ),
-                    rx.spacer(),
-                    rx.button(
-                        rx.icon("clipboard_copy", size=12),
-                        "Copy",
-                        size="1",
-                        variant="ghost",
-                        color_scheme="orange",
-                        on_click=rx.set_clipboard(state_cls.lf_grid_filter_preset_json),  # type: ignore[arg-type]
+                    rx.code_block(
+                        state_cls.lf_grid_filter_preset_json,
+                        language="json",
+                        show_line_numbers=False,
+                        wrap_long_lines=True,
                     ),
-                    rx.button(
-                        rx.icon("download", size=12),
-                        "Download",
-                        size="1",
-                        variant="ghost",
-                        color_scheme="orange",
-                        on_click=state_cls.download_lf_grid_preset,
-                    ),
-                    align="center",
-                    spacing="2",
-                    width="100%",
+                    margin_top="0.5em",
                 ),
-                rx.code_block(
-                    state_cls.lf_grid_filter_preset_json,
-                    language="json",
-                    show_line_numbers=False,
-                    wrap_long_lines=True,
+                rx.text(
+                    "No filter JSON yet. Apply a filter or sort to create a preset.",
+                    size="1",
+                    color="var(--orange-10)",
+                    margin_top="0.5em",
                 ),
-                margin_top="0.5em",
             ),
-        ),
-    )
+        )
 
     return rx.box(
         header,

@@ -938,6 +938,15 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
 
   if (hasDetailPanel) {
     // Inject expander column after the checkbox column (if present).
+    const _toggleDetailRow = (rowId) => {
+      setExpandedRowIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(rowId)) next.delete(rowId);
+        else next.add(rowId);
+        return next;
+      });
+    };
+
     const expanderCol = {
       field: "__detail_expand__",
       headerName: "",
@@ -959,12 +968,15 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
           "aria-expanded": isExp,
           onClick: (e) => {
             e.stopPropagation();
-            setExpandedRowIds((prev) => {
-              const next = new Set(prev);
-              if (next.has(rowId)) next.delete(rowId);
-              else next.add(rowId);
-              return next;
-            });
+            e.defaultMuiPrevented = true;
+            _toggleDetailRow(rowId);
+          },
+          onKeyDown: (e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.defaultMuiPrevented = true;
+            _toggleDetailRow(rowId);
           },
           style: {
             display: "flex", alignItems: "center",
@@ -1002,13 +1014,7 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
       _lastClickWasExpander = false;
       if (params.field === "__detail_expand__") {
         _lastClickWasExpander = true;
-        const rowId = _getRowIdFn(params.row);
-        setExpandedRowIds((prev) => {
-          const next = new Set(prev);
-          if (next.has(rowId)) next.delete(rowId);
-          else next.add(rowId);
-          return next;
-        });
+        if (event) event.defaultMuiPrevented = true;
         return;
       }
       if (typeof origOnCellClick === "function") origOnCellClick(params, event);
@@ -1125,7 +1131,7 @@ class DataGrid(rx.Component):
     a version that automatically wraps itself in a sized ``<div>``.
     """
 
-    library: str = "@mui/x-data-grid"
+    library: str = "@mui/x-data-grid@^8.27.0"
     tag: str = "UnlimitedDataGrid"
     is_default: bool = False
 
@@ -1158,11 +1164,27 @@ class DataGrid(rx.Component):
         """
         return {
             "@mui/x-data-grid": [
-                rx.ImportVar(tag="DataGrid", alias="MuiDataGrid_"),
-                rx.ImportVar(tag="GridSignature", alias="GridSignature_"),
-                rx.ImportVar(tag="useGridApiContext", alias="useGridApiContext_"),
-                rx.ImportVar(tag="useGridRootProps", alias="useGridRootProps_"),
-                rx.ImportVar(tag="GridFilterPanel", alias="GridFilterPanel_"),
+                rx.ImportVar(tag="DataGrid", alias="MuiDataGrid_", install=False),
+                rx.ImportVar(
+                    tag="GridSignature",
+                    alias="GridSignature_",
+                    install=False,
+                ),
+                rx.ImportVar(
+                    tag="useGridApiContext",
+                    alias="useGridApiContext_",
+                    install=False,
+                ),
+                rx.ImportVar(
+                    tag="useGridRootProps",
+                    alias="useGridRootProps_",
+                    install=False,
+                ),
+                rx.ImportVar(
+                    tag="GridFilterPanel",
+                    alias="GridFilterPanel_",
+                    install=False,
+                ),
             ],
             "react": [rx.ImportVar(tag="React", is_default=True)],
         }
