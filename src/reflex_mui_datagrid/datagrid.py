@@ -634,6 +634,22 @@ function _buildGridProps(props, unlimitedMode) {
         filterPanel: _FilterPanelWithApply,
       };
     }
+
+    // MUI's default toolbar quick filter is client-oriented. In server mode
+    // our Python backend only applies explicit column filters via Apply, so
+    // hide quick search by default to avoid showing a non-functional control.
+    const existingSlotProps = ep.slotProps || {};
+    const existingToolbarSlotProps = existingSlotProps.toolbar || {};
+    ep.slotProps = {
+      ...existingSlotProps,
+      toolbar: {
+        ...existingToolbarSlotProps,
+        showQuickFilter:
+          existingToolbarSlotProps.showQuickFilter !== undefined
+            ? existingToolbarSlotProps.showQuickFilter
+            : false,
+      },
+    };
   }
 
   // MUI DataGrid v8 expects rowSelectionModel ids as a Set, but JSON only supports Arrays.

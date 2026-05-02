@@ -101,7 +101,7 @@ wheels = [
 
 [[package]]
 name = "datagrid-demo"
-version = "0.1.2"
+version = "0.2.5"
 source = { editable = "examples/datagrid_demo" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -635,7 +635,7 @@ wheels = [
 
 [[package]]
 name = "reflex"
-version = "0.9.0"
+version = "0.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -665,14 +665,14 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/b8/1d41c506066c78146c96b31cdeae656b6f57a62caf17ec39b58201130de2/reflex-0.9.0.tar.gz", hash = "sha256:26e88a11c2a4b62ab842029dcb320d74259f04af8a6e3fd72991102eae8a4a78", size = 363218, upload-time = "2026-04-20T22:53:43.094Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/ad/07d00cdcd149bd656ec9caca4571fd01a916d085fbec5f9dcd68b3949c08/reflex-0.9.1.tar.gz", hash = "sha256:620428572556c37e24d0130e9db9a0835d8da0d3df8518c35c3fff189750ce68", size = 363398, upload-time = "2026-04-27T20:57:00.739Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3c/e5/3bf5b1048367831ddeeed8f2dd867640f0b9ee6acd4448a6b2fbb6b8f9d2/reflex-0.9.0-py3-none-any.whl", hash = "sha256:6f2c8ca40f5c8cd4b91116f43591a1200ac7cbfa55a04c6e997454f64510ee18", size = 615519, upload-time = "2026-04-20T22:53:44.599Z" },
+    { url = "https://files.pythonhosted.org/packages/47/d2/4f59552552875c7089bbd1d6a501b1b6c4a3b7e56a576cc1937d6d4ce1b5/reflex-0.9.1-py3-none-any.whl", hash = "sha256:fd32ef96689a4f6aaa2b46ec3f3efc689734ff59b00db19dc71be221a30b7b72", size = 615630, upload-time = "2026-04-27T20:56:59.197Z" },
 ]
 
 [[package]]
 name = "reflex-base"
-version = "0.9.0"
+version = "0.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
@@ -681,9 +681,9 @@ dependencies = [
     { name = "rich" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c3/01/03c7736c44fa096110e4d2edeb1ab1d7e83e79c974a433a6f8a9216d1e30/reflex_base-0.9.0.tar.gz", hash = "sha256:8a940b31b1e0d25b6bdb1018d38f0712794fe5d308f994054b6d42bfc36fdb01", size = 209085, upload-time = "2026-04-20T22:30:10.846Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/31/41/c993997bce722f8d8511d9428087cd725b07513263006af766ff866c67c1/reflex_base-0.9.1.tar.gz", hash = "sha256:cb8ed8c98305ad2229c818192589c433df2fd5952799e5b59c9222daf4bf4e41", size = 209428, upload-time = "2026-04-27T20:56:43.59Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/fb/beef36f69b247bde28d39c98d6ecdcad44e5e6738c1d3d5a3ef61d230fce/reflex_base-0.9.0-py3-none-any.whl", hash = "sha256:983915eaa5bacd89c9cd0055befab4c41157702cb9e80ff537379e6a5ed7c72a", size = 248606, upload-time = "2026-04-20T22:30:09.648Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/ee/e1b2f8cec4afcd4accb8d1a6380104d82b1190723e5c399a398e95ec27e6/reflex_base-0.9.1-py3-none-any.whl", hash = "sha256:ac20651aef317cd2d23eb82b3ce04a6c91c8fe0fc6e8dd8e65b5fd3cc6d42b0b", size = 248990, upload-time = "2026-04-27T20:56:41.873Z" },
 ]
 
 [[package]]
@@ -845,7 +845,7 @@ wheels = [
 
 [[package]]
 name = "reflex-mui-datagrid"
-version = "0.2.4"
+version = "0.2.5"
 source = { editable = "." }
 dependencies = [
     { name = "polars" },
@@ -868,7 +868,7 @@ dev = [
 requires-dist = [
     { name = "polars", specifier = ">=1.40.1" },
     { name = "polars-bio", marker = "python_full_version < '3.15' and extra == 'bio'", specifier = ">=0.29.0" },
-    { name = "reflex", specifier = ">=0.9.0" },
+    { name = "reflex", specifier = ">=0.9.1" },
     { name = "typer", specifier = ">=0.24.1" },
 ]
 provides-extras = ["bio"]

@@ -18,6 +18,7 @@ Tabs 2, 5, and 6 each use their own ``LazyFrameGridMixin`` substate so
 they get independent ``lf_grid_*`` state vars and caches.
 """
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,7 @@ from reflex_mui_datagrid import (
 )
 
 VCF_PATH: Path = Path(__file__).parent / "data" / "antku_small.vcf"
+VCF_UPLOAD_DIR: Path = Path(__file__).parent / "data" / "uploads"
 
 # Pre-compute VCF column descriptions at module level so both
 # the data loader and the row-click handler can use them.
@@ -439,6 +441,9 @@ class AppState(rx.State):
     vcf_columns: list[dict[str, Any]] = []
     vcf_selected: str = "Click a variant to see its details."
     vcf_row_count: int = 0
+    vcf_source_name: str = VCF_PATH.name
+    vcf_upload_status: str = ""
+    vcf_descriptions: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Initialisation
@@ -519,12 +524,18 @@ class AppState(rx.State):
         self.emp_rows = rows
         self.emp_columns = [c.dict() for c in col_defs]
 
-    def _load_vcf(self) -> None:
-        lf = pb.scan_vcf(str(VCF_PATH))
+    def _load_vcf_path(self, path: Path, source_name: str) -> None:
+        lf, descriptions = scan_file(path)
         rows, col_defs = bio_lazyframe_to_datagrid(lf)
         self.vcf_rows = rows
         self.vcf_columns = [c.dict() for c in col_defs]
         self.vcf_row_count = len(rows)
+        self.vcf_source_name = source_name
+        self.vcf_descriptions = descriptions
+
+    def _load_vcf(self) -> None:
+        self._load_vcf_path(VCF_PATH, VCF_PATH.name)
+        self.vcf_upload_status = "Loaded bundled demo VCF."
 
     # ------------------------------------------------------------------
     # Employee handlers
@@ -560,6 +571,50 @@ class AppState(rx.State):
     # Small VCF handlers
     # ------------------------------------------------------------------
 
+    async def handle_vcf_upload(
+        self,
+        files: list[rx.UploadFile],
+    ) -> AsyncIterator[None]:
+        """Load a custom VCF upload into the client-side VCF grid."""
+        if not files:
+            return
+
+        upload_file = files[0]
+        source_name = Path(upload_file.filename or "uploaded.vcf").name
+        suffixes = [suffix.lower() for suffix in Path(source_name).suffixes]
+        valid_vcf = suffixes[-1:] in ([".vcf"], [".bcf"])
+        valid_gzipped_vcf = suffixes[-2:] == [".vcf", ".gz"]
+        if not (valid_vcf or valid_gzipped_vcf):
+            self.vcf_upload_status = (
+                "Please upload a .vcf, .vcf.gz, or .bcf file."
+            )
+            yield
+            return
+
+        self.vcf_upload_status = f"Uploading {source_name}..."
+        yield
+
+        VCF_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        upload_path = VCF_UPLOAD_DIR / source_name
+        content = await upload_file.read()
+        upload_path.write_bytes(content)
+
+        self.vcf_upload_status = f"Scanning {source_name}..."
+        yield
+
+        try:
+            self._load_vcf_path(upload_path, source_name)
+        except Exception as exc:
+            self.vcf_upload_status = f"Could not load {source_name}: {exc}"
+            yield
+            return
+
+        self.vcf_selected = "Click a variant to see its details."
+        self.vcf_upload_status = (
+            f"Loaded {source_name} with {self.vcf_row_count} variants."
+        )
+        yield
+
     def handle_vcf_row_click(self, params: dict[str, Any]) -> None:
         """Handle VCF variant row click -- show all fields with descriptions."""
         row: dict[str, Any] = params.get("row", {})
@@ -570,7 +625,7 @@ class AppState(rx.State):
         for field, value in row.items():
             if field == "__row_id__":
                 continue
-            desc = VCF_DESCRIPTIONS.get(field, "")
+            desc = self.vcf_descriptions.get(field, "")
             if desc:
                 lines.append(f"{field}: {value}  ({desc})")
             else:
@@ -736,6 +791,7 @@ def employee_tab() -> rx.Component:
 
 def vcf_tab() -> rx.Component:
     """Genomic variants (VCF) tab content."""
+    upload_id = "custom_vcf_upload"
     return rx.box(
         rx.text(
             "Genomic variant calls loaded from a VCF file via ",
@@ -749,6 +805,49 @@ def vcf_tab() -> rx.Component:
             "Client-side filtering (MUI Community: single filter at a time).",
             margin_bottom="1em",
             color="var(--gray-11)",
+        ),
+        rx.hstack(
+            rx.upload(
+                rx.button(
+                    rx.icon("upload", size=14),
+                    "Upload custom VCF",
+                    size="2",
+                    variant="outline",
+                    color_scheme="blue",
+                ),
+                id=upload_id,
+                accept={
+                    ".vcf": ["text/vcf", "text/plain"],
+                    ".gz": ["application/gzip", "application/x-gzip"],
+                    ".vcf.gz": ["application/gzip", "application/x-gzip"],
+                    ".bcf": ["application/octet-stream"],
+                },
+                max_files=1,
+                no_drag=True,
+                on_drop=AppState.handle_vcf_upload(
+                    rx.upload_files(upload_id=upload_id)
+                ),
+                padding="0",
+                border="none",
+            ),
+            rx.text(
+                "Loaded file: ",
+                rx.code(AppState.vcf_source_name),
+                size="2",
+                color="var(--gray-10)",
+            ),
+            align="center",
+            gap="1em",
+            margin_bottom="0.5em",
+        ),
+        rx.cond(
+            AppState.vcf_upload_status != "",
+            rx.text(
+                AppState.vcf_upload_status,
+                size="2",
+                color="var(--gray-9)",
+                margin_bottom="0.5em",
+            ),
         ),
         rx.cond(
             AppState.vcf_rows.length() > 0,  # type: ignore[operator]

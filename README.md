@@ -302,7 +302,7 @@ def my_page() -> rx.Component:
 | `density` | `str` | `"compact"` | Grid density |
 | `column_header_height` | `int` | `70` | Header height in px |
 | `scroll_end_threshold` | `int` | `260` | Pixels from bottom to trigger next chunk |
-| `show_toolbar` | `bool` | `True` | Show MUI toolbar |
+| `show_toolbar` | `bool` | `False` | Show MUI toolbar. Disabled by default for server-side LazyFrame grids because toolbar export/search only operate on browser-loaded rows. |
 | `show_description_in_header` | `bool` | `True` | Show column descriptions as subtitles |
 | `show_filter_panel` | `bool` | `True` | Show the filter panel below the grid, including active filter summary and clear-all controls |
 | `show_filter_presets` | `bool` | `True` | Show JSON preset copy/download/upload controls inside the filter panel |

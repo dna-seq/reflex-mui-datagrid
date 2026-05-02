@@ -1,6 +1,6 @@
 [project]
 name = "reflex-mui-datagrid"
-version = "0.2.4"
+version = "0.2.5"
 description = "Reflex wrapper for the MUI X DataGrid (v8) React component with polars LazyFrame support"
 readme = "README.md"
 authors = [
@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "polars>=1.40.1",
-    "reflex>=0.9.0",
+    "reflex>=0.9.1",
     "typer>=0.24.1",
 ]
 

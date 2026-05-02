@@ -948,7 +948,7 @@ def lazyframe_grid(
     density: str = "compact",
     column_header_height: int = 70,
     scroll_end_threshold: int = 260,
-    show_toolbar: bool = True,
+    show_toolbar: bool = False,
     show_description_in_header: bool = True,
     show_filter_panel: bool = True,
     show_filter_presets: bool = True,
@@ -984,7 +984,9 @@ def lazyframe_grid(
         column_header_height: Header height in pixels.
         scroll_end_threshold: Pixel distance from bottom to trigger
             the next chunk load.
-        show_toolbar: Show the MUI toolbar.
+        show_toolbar: Show the MUI toolbar. Defaults to ``False`` because
+            MUI toolbar actions such as export operate on browser-loaded rows,
+            not the full server-side LazyFrame result.
         show_description_in_header: Show column descriptions as subtitles.
         show_filter_panel: Show the filter debug / Filter JSON panel
             below the grid.  Defaults to ``True``.
