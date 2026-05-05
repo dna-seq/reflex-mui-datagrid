@@ -168,22 +168,81 @@ def _build_prs_lazyframe() -> pl.LazyFrame:
         for p in populations:
             pop_values[p] = round(random.uniform(0, 100), 1) if random.random() > 0.4 else ""
 
+        pct = rec["pct"]
+        auroc_val = rec["auroc"]
+        quality = rec["quality"]
+
+        risk_tone = "good" if pct < 25 else ("warning" if pct < 75 else "danger")
+        conf_tone = "good" if quality == "High" else ("warning" if quality == "Moderate" else "danger")
+        risk_details = [
+            {"label": "Best estimate", "value": f"{pct}%", "tone": risk_tone},
+            {"label": "Population average", "value": "50%"},
+            {"label": "Risk vs average", "value": f"{pct / 50:.2f}x" if pct > 0 else "N/A"},
+            {"label": "Confidence", "value": quality, "tone": conf_tone},
+        ]
+
+        methods_list = [
+            {"label": rec["method"], "value": f"{pct}%",
+             "subtext": f"{pct / 50:.2f}x average, {quality.lower()} confidence" if pct > 0 else "No percentile available"},
+        ]
+        if auroc_val:
+            methods_list.append(
+                {"label": "AUROC model", "value": f"{auroc_val:.3f}",
+                 "subtext": f"Match rate {rec['match']:.0f}%"}
+            )
+
+        pop_pct_items: list[dict[str, Any]] = []
+        outlier_labels: list[str] = []
+        if pct > 0:
+            for p in populations:
+                v = pop_values.get(p)
+                if v and v != "":
+                    tone = "danger" if float(v) > 90 else ("warning" if float(v) > 75 else None)
+                    item: dict[str, Any] = {"label": p, "value": float(v)}
+                    if tone:
+                        item["tone"] = tone
+                    pop_pct_items.append(item)
+                    if float(v) > 90:
+                        outlier_labels.append(p)
+        pop_summary = (
+            "No percentile data available."
+            if pct == 0
+            else "Models agree." if len(outlier_labels) == 0
+            else f"Outlier populations: {', '.join(outlier_labels)}."
+        )
+        population_percentiles = {
+            "score": pct if pct > 0 else None,
+            "items": pop_pct_items,
+            "outliers": outlier_labels,
+            "summary": pop_summary,
+        }
+
+        warnings = []
+        if len(outlier_labels) > 0:
+            warnings.append({"label": "Wide spread", "tone": "warning"})
+        if quality == "Low":
+            warnings.append({"label": "Low confidence", "tone": "danger"})
+        warnings.append({"label": "Not a diagnosis", "tone": "neutral"})
+
         row = {
             "PGS ID": rec["pgs_id"],
             "Trait": rec["trait"],
             "PRS Score": rec["score"],
-            "Percentile": rec["pct"],
+            "Percentile": pct,
             **{p: v for p, v in pop_values.items()},
             "Pct. Method": rec["method"],
-            "AUROC": rec["auroc"] if rec["auroc"] is not None else "",
-            "Quality": rec["quality"],
+            "AUROC": auroc_val if auroc_val is not None else "",
+            "Quality": quality,
             "Match Rate": rec["match"],
             "Population": rec["pop"],
-            # Hidden detail-only fields:
-            "risk_hint": f"{rec['pgs_id']}  |  {risk_tag}  |  Quality: {rec['quality']}  |  Pop: {rec['pop']}  |  Ref: precomputed (AFR, AMR, EAS, EUR, SAS)",
+            # Hidden detail-only fields (text):
+            "risk_hint": f"{rec['pgs_id']}  |  {risk_tag}  |  Quality: {quality}  |  Pop: {rec['pop']}  |  Ref: precomputed (AFR, AMR, EAS, EUR, SAS)",
             "interpretation": interpretation,
-            "estimated_percentile": est_pct,
-            "reference_source": ref_source,
+            # Rich detail fields (structured JSON):
+            "risk_details": risk_details,
+            "risk_methods": methods_list,
+            "population_percentiles": population_percentiles,
+            "trait_warnings": warnings,
         }
         data.append(row)
     return pl.LazyFrame(data)
@@ -461,8 +520,10 @@ class AppState(rx.State):
 
         # Fields shown only in the expandable detail panel, not as grid columns.
         detail_only_fields = {
-            "risk_hint", "interpretation", "estimated_percentile",
+            "risk_hint", "interpretation",
             "reference_source", "Population",
+            "risk_details", "risk_methods",
+            "population_percentiles", "trait_warnings",
         }
 
         population_colors: dict[str, tuple[str, str]] = {
@@ -654,14 +715,13 @@ def prs_tab() -> rx.Component:
     return rx.box(
         rx.text(
             "Polygenic Risk Score results with ",
-            rx.text("expandable detail panels", weight="bold", as_="span"),
+            rx.text("rich detail panels", weight="bold", as_="span"),
             ". Click the ",
             rx.text("\u25B6", as_="span", weight="bold"),
-            " chevron on any row to reveal the full PRS interpretation, "
-            "estimated percentile breakdown, and reference source -- "
-            "information that would clutter the grid as columns but is "
-            "essential for understanding each score. "
-            "Badges and progress bars highlight key values.",
+            " chevron on any row to see key-value risk assessments, "
+            "metric cards for scoring methods, a Plotly bell curve "
+            "chart, and badge warnings -- all rendered from "
+            "structured JSON row data via detail_renderers.",
             margin_bottom="1em",
             color="var(--gray-11)",
         ),
@@ -678,18 +738,37 @@ def prs_tab() -> rx.Component:
                 on_row_click=AppState.handle_prs_row_click,
                 detail_columns=[
                     "risk_hint",
+                    "risk_details",
+                    "risk_methods",
+                    "population_percentiles",
+                    "trait_warnings",
                     "interpretation",
-                    "estimated_percentile",
-                    "reference_source",
                 ],
                 detail_labels={
                     "risk_hint": "Summary",
+                    "risk_details": "Risk Assessment",
+                    "risk_methods": "Scoring Methods",
+                    "population_percentiles": "Population Percentiles",
+                    "trait_warnings": "Warnings",
                     "interpretation": "Interpretation",
-                    "estimated_percentile": "Estimated Percentile",
-                    "reference_source": "Reference Source",
                 },
                 detail_badge_fields=["risk_hint"],
-                detail_height=200,
+                detail_renderers={
+                    "risk_details": {"type": "key_value_list"},
+                    "risk_methods": {"type": "metric_list"},
+                    "population_percentiles": {
+                        "type": "bell_curve",
+                        "scaleMin": 0,
+                        "scaleMax": 100,
+                        "bands": [
+                            {"from": 25, "to": 75, "label": "average range"},
+                            {"from": 75, "to": 90, "label": "above average"},
+                            {"from": 90, "to": 100, "label": "high"},
+                        ],
+                    },
+                    "trait_warnings": {"type": "badge_list"},
+                },
+                detail_height=420,
                 height="600px",
             ),
             rx.text("Loading data...", color="var(--gray-9)", font_style="italic"),

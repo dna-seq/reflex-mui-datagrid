@@ -27,10 +27,15 @@ from reflex_mui_datagrid.lazyframe_grid import (
 )
 from reflex_mui_datagrid.models import (
     ColumnDef,
+    DetailRendererConfig,
+    PercentileBand,
+    PercentileData,
+    TonedItem,
     UrlCellRenderer,
     BadgeCellRenderer,
     ProgressBarCellRenderer,
 )
+from reflex_mui_datagrid.plotly_support import PlotlyDetailSupport
 from reflex_mui_datagrid.polars_utils import (
     apply_filter_model,
     apply_sort_model,

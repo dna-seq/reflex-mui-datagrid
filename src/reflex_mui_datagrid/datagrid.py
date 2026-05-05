@@ -442,6 +442,8 @@ function _buildGridProps(props, unlimitedMode) {
     detailBadgeFields,
     detail_badge_colors,
     detailBadgeColors,
+    detail_renderers,
+    detailRenderers,
     ...rest
   } = props;
   // Widen columns so the header title is not hidden when MUI shows
@@ -690,6 +692,400 @@ function _buildGridProps(props, unlimitedMode) {
 //     These return React elements (not HTML strings) so the virtualiser can
 //     render them natively alongside rows.
 // ---------------------------------------------------------------------------
+
+// Tone-to-color mapping for rich detail renderers.
+const _TONE_COLORS = {
+  neutral:  { fg: "#616161", bg: "#f5f5f5", border: "#bdbdbd" },
+  good:     { fg: "#2e7d32", bg: "#e8f5e9", border: "#81c784" },
+  info:     { fg: "#1565c0", bg: "#e3f2fd", border: "#64b5f6" },
+  warning:  { fg: "#e65100", bg: "#fff3e0", border: "#ffb74d" },
+  danger:   { fg: "#c62828", bg: "#ffebee", border: "#ef9a9a" },
+};
+function _toneStyle(tone) {
+  return _TONE_COLORS[tone] || _TONE_COLORS.neutral;
+}
+
+// ---- Rich detail renderer: badge_list ----
+function _renderBadgeList(data) {
+  if (!Array.isArray(data)) return null;
+  const badges = data.map(function(item, i) {
+    var tc = _toneStyle(item.tone);
+    return React.createElement("span", {
+      key: i,
+      style: {
+        display: "inline-block", padding: "4px 12px", borderRadius: 4,
+        fontSize: 12, fontWeight: 500, letterSpacing: "0.02em",
+        background: tc.bg, color: tc.fg, border: "1px solid " + tc.border,
+        whiteSpace: "nowrap",
+      },
+    }, item.label || "");
+  });
+  return React.createElement("div", {
+    style: { display: "flex", flexWrap: "wrap", gap: 6, padding: "4px 0" },
+  }, ...badges);
+}
+
+// ---- Rich detail renderer: key_value_list ----
+function _renderKeyValueList(data) {
+  if (!Array.isArray(data)) return null;
+  var rows = data.map(function(item, i) {
+    var tc = _toneStyle(item.tone);
+    return React.createElement("div", {
+      key: i,
+      style: {
+        display: "flex", alignItems: "baseline", gap: 12,
+        padding: "6px 0", borderBottom: "1px solid rgba(0,0,0,0.06)",
+      },
+    },
+      React.createElement("span", {
+        style: { fontWeight: 600, minWidth: 160, flexShrink: 0, color: "rgba(0,0,0,0.6)", fontSize: 13 },
+      }, (item.label || "") + ":"),
+      React.createElement("span", {
+        style: { color: tc.fg, fontWeight: item.tone ? 600 : 400, fontSize: 13 },
+      }, item.value != null ? String(item.value) : ""),
+      item.subtext ? React.createElement("span", {
+        style: { color: "rgba(0,0,0,0.45)", fontSize: 11, marginLeft: 6 },
+      }, item.subtext) : null
+    );
+  });
+  return React.createElement("div", { style: { padding: "2px 0" } }, ...rows);
+}
+
+// ---- Rich detail renderer: metric_list ----
+function _renderMetricList(data) {
+  if (!Array.isArray(data)) return null;
+  var cards = data.map(function(item, i) {
+    var tc = _toneStyle(item.tone);
+    return React.createElement("div", {
+      key: i,
+      style: {
+        display: "flex", flexDirection: "column", padding: "10px 16px",
+        borderRadius: 6, background: tc.bg, border: "1px solid " + tc.border,
+        minWidth: 140, flex: "1 1 140px", maxWidth: 260,
+      },
+    },
+      React.createElement("div", {
+        style: { fontSize: 11, color: "rgba(0,0,0,0.55)", marginBottom: 2, fontWeight: 500 },
+      }, item.label || ""),
+      React.createElement("div", {
+        style: { fontSize: 18, fontWeight: 700, color: tc.fg, lineHeight: 1.3 },
+      }, item.value != null ? String(item.value) : ""),
+      item.subtext ? React.createElement("div", {
+        style: { fontSize: 11, color: "rgba(0,0,0,0.45)", marginTop: 3, lineHeight: 1.3 },
+      }, item.subtext) : null
+    );
+  });
+  return React.createElement("div", {
+    style: { display: "flex", flexWrap: "wrap", gap: 10, padding: "4px 0" },
+  }, ...cards);
+}
+
+// ---- Rich detail renderer: percentile_spread ----
+function _renderPercentileSpread(data, config) {
+  if (!data || typeof data !== "object") return null;
+  var scaleMin = (config && config.scaleMin != null) ? config.scaleMin : 0;
+  var scaleMax = (config && config.scaleMax != null) ? config.scaleMax : 100;
+  var range = scaleMax - scaleMin || 1;
+  var items = Array.isArray(data.items) ? data.items : [];
+  var outlierSet = new Set(Array.isArray(data.outliers) ? data.outliers : []);
+
+  var bands = (config && Array.isArray(config.bands)) ? config.bands : [
+    { from: 25, to: 75, label: "average range" },
+  ];
+
+  var bandEls = bands.map(function(band, i) {
+    var left = ((band.from - scaleMin) / range) * 100;
+    var width = ((band.to - band.from) / range) * 100;
+    return React.createElement("div", {
+      key: "band_" + i,
+      title: band.label || "",
+      style: {
+        position: "absolute", top: 0, bottom: 0,
+        left: left + "%", width: width + "%",
+        background: "rgba(25, 118, 210, 0.10)",
+        borderLeft: "1px dashed rgba(25, 118, 210, 0.3)",
+        borderRight: "1px dashed rgba(25, 118, 210, 0.3)",
+      },
+    });
+  });
+
+  var markerEls = items.map(function(item, i) {
+    var val = Number(item.value);
+    if (isNaN(val)) return null;
+    var pct = ((val - scaleMin) / range) * 100;
+    pct = Math.max(0, Math.min(100, pct));
+    var isOutlier = outlierSet.has(item.label);
+    var tc = _toneStyle(item.tone || (isOutlier ? "danger" : "info"));
+    return React.createElement("div", {
+      key: "marker_" + i,
+      title: (item.label || "") + ": " + val,
+      style: {
+        position: "absolute", top: -4, width: isOutlier ? 14 : 10, height: isOutlier ? 14 : 10,
+        borderRadius: "50%", background: tc.fg, border: "2px solid " + tc.border,
+        left: "calc(" + pct + "% - " + (isOutlier ? 7 : 5) + "px)",
+        zIndex: isOutlier ? 2 : 1, cursor: "default",
+        boxShadow: isOutlier ? "0 0 4px " + tc.fg : "none",
+      },
+    });
+  });
+
+  var medianEl = null;
+  var _spreadScore = data.score != null ? data.score : data.median;
+  if (_spreadScore != null) {
+    var medPct = ((Number(_spreadScore) - scaleMin) / range) * 100;
+    medPct = Math.max(0, Math.min(100, medPct));
+    medianEl = React.createElement("div", {
+      title: "Your score: " + _spreadScore,
+      style: {
+        position: "absolute", top: -6, left: "calc(" + medPct + "% - 1px)",
+        width: 2, height: 20, background: "#f57c00", zIndex: 3,
+      },
+    });
+  }
+
+  var labelEls = items.map(function(item, i) {
+    var val = Number(item.value);
+    if (isNaN(val)) return null;
+    var pct = ((val - scaleMin) / range) * 100;
+    pct = Math.max(0, Math.min(100, pct));
+    var isOutlier = outlierSet.has(item.label);
+    var tc = _toneStyle(item.tone || (isOutlier ? "danger" : "info"));
+    return React.createElement("div", {
+      key: "lbl_" + i,
+      style: {
+        position: "absolute", top: 16,
+        left: pct + "%", transform: "translateX(-50%)",
+        fontSize: 9, color: tc.fg, whiteSpace: "nowrap",
+        fontWeight: isOutlier ? 700 : 400,
+      },
+    }, item.label || "");
+  });
+
+  var track = React.createElement("div", {
+    style: {
+      position: "relative", height: 8, background: "#e0e0e0",
+      borderRadius: 4, width: "100%",
+    },
+  }, ...bandEls, ...markerEls, medianEl);
+
+  var legendRow = React.createElement("div", {
+    style: { position: "relative", height: 22, width: "100%" },
+  }, ...labelEls);
+
+  var scaleLabels = React.createElement("div", {
+    style: { display: "flex", justifyContent: "space-between", fontSize: 10, color: "#999", marginTop: 2 },
+  },
+    React.createElement("span", null, String(scaleMin)),
+    React.createElement("span", null, String(scaleMax))
+  );
+
+  var summaryEl = data.summary ? React.createElement("div", {
+    style: { fontSize: 11, color: "rgba(0,0,0,0.55)", marginTop: 6, fontStyle: "italic" },
+  }, data.summary) : null;
+
+  return React.createElement("div", {
+    style: { padding: "8px 0", maxWidth: 500 },
+  }, track, legendRow, scaleLabels, summaryEl);
+}
+
+// ---- Rich detail renderer: bell_curve ----
+// Normal PDF and inverse CDF (Beasley-Springer-Moro rational approximation).
+function _normalPdf(x) {
+  return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+}
+function _percentileToZ(p) {
+  if (p <= 0) return -3.5;
+  if (p >= 1) return 3.5;
+  var a = [0, -3.969683028665376e1, 2.209460984245205e2,
+    -2.759285104469687e2, 1.383577518672690e2,
+    -3.066479806614716e1, 2.506628277459239e0];
+  var b = [0, -5.447609879822406e1, 1.615858368580409e2,
+    -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
+  var c = [0, -7.784894002430293e-3, -3.223964580411365e-1,
+    -2.400758277161838e0, -2.549732539343734e0,
+    4.374664141464968e0, 2.938163982698783e0];
+  var d = [0, 7.784695709041462e-3, 3.224671290700398e-1,
+    2.445134137142996e0, 3.754408661907416e0];
+  var pLow = 0.02425, pHigh = 1 - pLow;
+  var q, r;
+  if (p < pLow) {
+    q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[1]*q+c[2])*q+c[3])*q+c[4])*q+c[5])*q+c[6]) /
+           ((((d[1]*q+d[2])*q+d[3])*q+d[4])*q+1);
+  } else if (p <= pHigh) {
+    q = p - 0.5; r = q * q;
+    return (((((a[1]*r+a[2])*r+a[3])*r+a[4])*r+a[5])*r+a[6])*q /
+           (((((b[1]*r+b[2])*r+b[3])*r+b[4])*r+b[5])*r+1);
+  } else {
+    q = Math.sqrt(-2 * Math.log(1 - p));
+    return -(((((c[1]*q+c[2])*q+c[3])*q+c[4])*q+c[5])*q+c[6]) /
+            ((((d[1]*q+d[2])*q+d[3])*q+d[4])*q+1);
+  }
+}
+
+var _plotlyImportPromise = null;
+var _PlotComponent = null;
+var _plotlyFailed = false;
+
+function _resolvePlotComponent(mod) {
+  if (typeof mod === "function") return mod;
+  if (mod && typeof mod.default === "function") return mod.default;
+  if (mod && mod.default && typeof mod.default.default === "function") return mod.default.default;
+  if (mod && typeof mod.Plot === "function") return mod.Plot;
+  return null;
+}
+
+function _BellCurveRenderer(props) {
+  var data = props.data;
+  var config = props.config;
+  var _ref = React.useState(0), tick = _ref[0], setTick = _ref[1];
+
+  React.useEffect(function() {
+    if (_PlotComponent || _plotlyFailed) return;
+    if (!_plotlyImportPromise) {
+      _plotlyImportPromise = import("react-plotly.js").then(function(mod) {
+        _PlotComponent = _resolvePlotComponent(mod);
+        if (!_PlotComponent) _plotlyFailed = true;
+      }).catch(function() {
+        _plotlyFailed = true;
+      });
+    }
+    _plotlyImportPromise.then(function() { setTick(function(t) { return t + 1; }); });
+  }, []);
+
+  if (_plotlyFailed || !data || typeof data !== "object") {
+    return _renderPercentileSpread(data, config);
+  }
+  if (!_PlotComponent) {
+    return React.createElement("div", {
+      style: { padding: 8, color: "#999", fontSize: 12 },
+    }, "Loading chart...");
+  }
+
+  var items = Array.isArray(data.items) ? data.items : [];
+  var scaleMin = (config && config.scaleMin != null) ? config.scaleMin : 0;
+  var scaleMax = (config && config.scaleMax != null) ? config.scaleMax : 100;
+  var outlierSet = new Set(Array.isArray(data.outliers) ? data.outliers : []);
+
+  var xCurve = [], yCurve = [];
+  for (var i = 0; i <= 200; i++) {
+    var z = -3.5 + (i / 200) * 7;
+    xCurve.push(z);
+    yCurve.push(_normalPdf(z));
+  }
+
+  var traces = [{
+    x: xCurve, y: yCurve, type: "scatter", mode: "lines",
+    fill: "tozeroy", fillcolor: "rgba(25,118,210,0.08)",
+    line: { color: "#1976d2", width: 2 },
+    hoverinfo: "skip", showlegend: false,
+  }];
+
+  var shapes = [];
+  var annotations = [];
+
+  var bands = (config && Array.isArray(config.bands)) ? config.bands : [
+    { from: 25, to: 75, label: "average range" },
+  ];
+  for (var bi = 0; bi < bands.length; bi++) {
+    var band = bands[bi];
+    var zFrom = _percentileToZ(band.from / 100);
+    var zTo = _percentileToZ(band.to / 100);
+    shapes.push({
+      type: "rect", xref: "x", yref: "paper",
+      x0: zFrom, x1: zTo, y0: 0, y1: 1,
+      fillcolor: "rgba(25,118,210,0.06)", line: { width: 0 },
+      layer: "below",
+    });
+  }
+
+  for (var mi = 0; mi < items.length; mi++) {
+    var item = items[mi];
+    var val = Number(item.value);
+    if (isNaN(val)) continue;
+    var pFrac = (val - scaleMin) / ((scaleMax - scaleMin) || 1);
+    pFrac = Math.max(0.001, Math.min(0.999, pFrac));
+    var zVal = _percentileToZ(pFrac);
+    var yVal = _normalPdf(zVal);
+    var isOutlier = outlierSet.has(item.label);
+    var tc = _toneStyle(item.tone || (isOutlier ? "danger" : "info"));
+
+    shapes.push({
+      type: "line", xref: "x", yref: "paper",
+      x0: zVal, x1: zVal, y0: 0, y1: 0.95,
+      line: { color: tc.fg, width: isOutlier ? 2.5 : 1.5, dash: isOutlier ? "solid" : "dot" },
+    });
+
+    traces.push({
+      x: [zVal], y: [yVal], type: "scatter", mode: "markers",
+      marker: {
+        size: isOutlier ? 12 : 9, color: tc.fg,
+        line: { color: "#fff", width: 1.5 },
+        symbol: isOutlier ? "diamond" : "circle",
+      },
+      name: item.label,
+      text: [(item.label || "") + ": " + val + "th pct"],
+      hoverinfo: "text",
+      showlegend: true,
+    });
+
+    annotations.push({
+      x: zVal, y: yVal, xref: "x", yref: "y",
+      text: item.label || "", showarrow: true,
+      arrowhead: 0, arrowcolor: tc.fg,
+      ax: 0, ay: isOutlier ? -30 : -22,
+      font: { size: 10, color: tc.fg, weight: isOutlier ? 700 : 400 },
+    });
+  }
+
+  var scoreVal = data.score != null ? data.score : data.median;
+  if (scoreVal != null) {
+    var medFrac = (Number(scoreVal) - scaleMin) / ((scaleMax - scaleMin) || 1);
+    medFrac = Math.max(0.001, Math.min(0.999, medFrac));
+    var zMed = _percentileToZ(medFrac);
+    shapes.push({
+      type: "line", xref: "x", yref: "paper",
+      x0: zMed, x1: zMed, y0: 0, y1: 1,
+      line: { color: "#f57c00", width: 2 },
+    });
+    var scoreLabel = data.scoreLabel || "you (" + Math.round(Number(scoreVal)) + "th)";
+    annotations.push({
+      x: zMed, y: _normalPdf(zMed), xref: "x", yref: "y",
+      text: scoreLabel, showarrow: false,
+      yshift: 14, font: { size: 9, color: "#f57c00" },
+    });
+  }
+
+  var layout = {
+    width: 460, height: 220, margin: { l: 30, r: 20, t: 10, b: 35 },
+    xaxis: {
+      title: { text: "Percentile", font: { size: 11 } },
+      tickvals: [-2.326, -1.645, -0.674, 0, 0.674, 1.645, 2.326],
+      ticktext: ["1", "5", "25", "50", "75", "95", "99"],
+      range: [-3.5, 3.5], zeroline: false,
+    },
+    yaxis: { visible: false, range: [0, 0.45] },
+    shapes: shapes, annotations: annotations,
+    legend: { orientation: "h", y: -0.25, x: 0.5, xanchor: "center", font: { size: 10 } },
+    plot_bgcolor: "rgba(0,0,0,0)",
+    paper_bgcolor: "rgba(0,0,0,0)",
+    hoverlabel: { font: { size: 11 } },
+  };
+
+  var summaryEl = data.summary ? React.createElement("div", {
+    style: { fontSize: 11, color: "rgba(0,0,0,0.55)", marginTop: 4, fontStyle: "italic" },
+  }, data.summary) : null;
+
+  return React.createElement("div", { style: { padding: "4px 0" } },
+    React.createElement(_PlotComponent, {
+      data: traces, layout: layout,
+      config: { staticPlot: false, displayModeBar: false, responsive: true },
+      style: { width: "100%", maxWidth: 480 },
+    }),
+    summaryEl
+  );
+}
+
 function _smartBadgeColor(text) {
   const t = text.toLowerCase();
   if (/^pgs\\d/i.test(t))                             return ["#37474f","#eceff1"];
@@ -705,9 +1101,10 @@ function _smartBadgeColor(text) {
   return ["#455a64","#eceff1"];
 }
 
-function _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeFields, badgeColors) {
+function _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeFields, badgeColors, detailRenderers) {
   const _badgeFieldSet = new Set(badgeFields || []);
   const _badgeColorMap = badgeColors || {};
+  const _renderers = detailRenderers || {};
   const items = detailCols.map((field, idx) => {
     const val = row[field];
     let label = (detailLabels || {})[field];
@@ -715,6 +1112,43 @@ function _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeF
       const colDef = (columns || []).find((c) => c.field === field);
       label = (colDef && (colDef.headerName || colDef.header_name)) || field;
     }
+
+    // Check for a rich renderer config for this field.
+    var rendererCfg = _renderers[field];
+    if (rendererCfg && rendererCfg.type) {
+      // Structured data may arrive as a JSON string from Reflex serialisation.
+      var parsed = val;
+      if (typeof val === "string" && val.length > 0 && (val[0] === "[" || val[0] === "{")) {
+        try { parsed = JSON.parse(val); } catch(_e) { parsed = val; }
+      }
+      var richEl = null;
+      var rtype = rendererCfg.type;
+      if (rtype === "badge_list" && Array.isArray(parsed)) {
+        richEl = _renderBadgeList(parsed);
+      } else if (rtype === "key_value_list" && Array.isArray(parsed)) {
+        richEl = _renderKeyValueList(parsed);
+      } else if (rtype === "metric_list" && Array.isArray(parsed)) {
+        richEl = _renderMetricList(parsed);
+      } else if (rtype === "percentile_spread" && parsed && typeof parsed === "object") {
+        richEl = _renderPercentileSpread(parsed, rendererCfg);
+      } else if (rtype === "bell_curve" && parsed && typeof parsed === "object") {
+        richEl = React.createElement(_BellCurveRenderer, { data: parsed, config: rendererCfg });
+      }
+      // If the rich renderer produced output, wrap with label.
+      if (richEl) {
+        return React.createElement("div", {
+          key: field,
+          style: { padding: "8px 0", borderBottom: "1px solid rgba(0,0,0,0.06)" },
+        },
+          React.createElement("div", {
+            style: { fontWeight: 600, color: "rgba(0,0,0,0.6)", fontSize: 12, marginBottom: 6 },
+          }, label),
+          richEl
+        );
+      }
+      // Fallback: degrade to text for malformed data.
+    }
+
     const valStr = val != null ? String(val) : "";
 
     if (_badgeFieldSet.has(field)) {
@@ -777,15 +1211,16 @@ function _DetailPanelsSlot(props) {
   const data = _detailPanelDataRef.current;
   const setPanels = virtualScroller && virtualScroller.setPanels;
 
-  const expandedRowIds = data && data.expandedRowIds;
-  const detailCols     = data && data.detailCols;
-  const detailLabels   = data && data.detailLabels;
-  const detailHeight   = data && data.detailHeight;
-  const badgeFields    = data && data.badgeFields;
-  const badgeColors    = data && data.badgeColors;
-  const rows           = data && data.rows;
-  const columns        = data && data.columns;
-  const getRowIdFn     = data && data.getRowIdFn;
+  const expandedRowIds   = data && data.expandedRowIds;
+  const detailCols       = data && data.detailCols;
+  const detailLabels     = data && data.detailLabels;
+  const detailHeight     = data && data.detailHeight;
+  const badgeFields      = data && data.badgeFields;
+  const badgeColors      = data && data.badgeColors;
+  const detailRenderers  = data && data.detailRenderers;
+  const rows             = data && data.rows;
+  const columns          = data && data.columns;
+  const getRowIdFn       = data && data.getRowIdFn;
 
   React.useEffect(() => {
     if (typeof setPanels !== "function") return;
@@ -809,7 +1244,7 @@ function _DetailPanelsSlot(props) {
       const row = rowById[rowId];
       if (!row) continue;
 
-      const content = _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeFields, badgeColors);
+      const content = _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeFields, badgeColors, detailRenderers);
       const panel = React.createElement("div", {
         key: "__detail_panel_" + String(rowId),
         style: {
@@ -830,7 +1265,7 @@ function _DetailPanelsSlot(props) {
 
     return () => { setPanels(new Map()); };
   }, [setPanels, expandedRowIds, rows, columns, detailCols, detailLabels,
-      detailHeight, badgeFields, badgeColors, getRowIdFn]);
+      detailHeight, badgeFields, badgeColors, detailRenderers, getRowIdFn]);
 
   return null;
 }
@@ -952,6 +1387,7 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
   const _detailH = props.detailHeight || props.detail_height || 0;
   const _badgeFields = props.detailBadgeFields || props.detail_badge_fields || [];
   const _badgeColors = props.detailBadgeColors || props.detail_badge_colors || {};
+  const _detailRenderers = props.detailRenderers || props.detail_renderers || {};
   const hasDetailPanel = Array.isArray(_detailCols) && _detailCols.length > 0;
 
   if (hasDetailPanel) {
@@ -1057,6 +1493,7 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
       detailHeight: _detailH,
       badgeFields: _badgeFields,
       badgeColors: _badgeColors,
+      detailRenderers: _detailRenderers,
       rows: props.rows || [],
       columns: effectiveProps.columns || [],
       getRowIdFn: effectiveProps.getRowId || ((r) => r.id),
@@ -1285,6 +1722,7 @@ class DataGrid(rx.Component):
     detail_labels: rx.Var[dict[str, str]]
     detail_badge_fields: rx.Var[list[str]]
     detail_badge_colors: rx.Var[dict[str, list[str]]]
+    detail_renderers: rx.Var[dict[str, Any]]
 
     # ---- slots / customisation ----
     slot_props: rx.Var[dict[str, Any]]

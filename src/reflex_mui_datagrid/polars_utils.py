@@ -588,38 +588,35 @@ def _dataframe_to_dicts(df: pl.DataFrame) -> list[dict[str, Any]]:
 
     Non-JSON-safe column types are converted automatically:
     * Temporal columns (Date, Datetime, Time, Duration) -> ISO-8601 strings.
-    * List columns -> comma-joined strings (inner values cast to String first).
-    * Struct columns -> cast to String.
+    * List(Struct) columns -> kept as native Python dicts/lists (already
+      JSON-serializable via ``to_dicts()``). This preserves structured data
+      needed by rich detail renderers.
+    * Other List columns -> comma-joined strings (inner values cast to String).
+    * Struct columns -> kept as native Python dicts (JSON-serializable).
 
     Other types are left as-is (polars ``to_dicts()`` already returns
     Python-native scalars for numeric / string / bool).
     """
     temporal_cols: set[str] = set()
-    list_cols: set[str] = set()
-    struct_cols: set[str] = set()
+    flat_list_cols: set[str] = set()
 
     for name, dtype in df.schema.items():
         if isinstance(dtype, (pl.Date, pl.Datetime, pl.Time, pl.Duration)):
             temporal_cols.add(name)
         elif isinstance(dtype, pl.List):
-            list_cols.add(name)
-        elif isinstance(dtype, pl.Struct):
-            struct_cols.add(name)
+            if not isinstance(dtype.inner, pl.Struct):
+                flat_list_cols.add(name)
 
-    needs_cast = temporal_cols | list_cols | struct_cols
+    needs_cast = temporal_cols | flat_list_cols
     if not needs_cast:
         return df.to_dicts()
 
-    # Build select expressions that preserve original column order,
-    # casting non-JSON-safe columns to String for safe serialisation.
     exprs: list[pl.Expr] = []
     for c in df.columns:
         if c in temporal_cols:
             exprs.append(pl.col(c).cast(pl.String))
-        elif c in list_cols:
+        elif c in flat_list_cols:
             exprs.append(pl.col(c).cast(pl.List(pl.String)).list.join(","))
-        elif c in struct_cols:
-            exprs.append(pl.col(c).cast(pl.String))
         else:
             exprs.append(pl.col(c))
 

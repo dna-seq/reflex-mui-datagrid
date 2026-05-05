@@ -129,6 +129,7 @@ grid = show_dataframe(
 - **JSON-safe serialization** -- temporal columns become ISO strings, `List` columns become comma-joined strings, `Struct` columns become strings
 - **Column, row, and selection events** -- handlers for row click, cell click, sorting, filtering, pagination, and row selection
 - **Expandable row detail panels** -- click a chevron to reveal additional fields below any row, with configurable badge rendering and custom colors
+- **Rich detail renderers** -- `detail_renderers` prop supports six renderer types for structured row data: `key_value_list`, `metric_list`, `badge_list`, `percentile_spread`, `bell_curve`, and `text`. Optional Plotly-based bell curve charts when `react-plotly.js` is available (auto-fallback to div-based spread)
 
 ## Server-Side Scroll-Loading (Large Datasets)
 
@@ -385,6 +386,74 @@ lazyframe_grid(
 | `detail_labels` | `dict[str, str]` | `{field: label}` mapping for display labels. Falls back to the column's `headerName` or the raw field name. |
 | `detail_badge_fields` | `list[str]` | Fields whose values are split on `\|` and rendered as colored badges. |
 | `detail_badge_colors` | `dict[str, list[str]]` | Custom colors keyed by badge text. Each value is `[foreground_color, background_color]`. Unmatched text falls back to the built-in heuristic. |
+| `detail_renderers` | `dict[str, dict]` | Maps field names to rich renderer configs. See Rich Detail Renderers below. |
+
+### Rich Detail Renderers
+
+The `detail_renderers` prop maps field names to renderer configurations that render structured JSON row data as rich UI elements inside detail panels. Six renderer types are available:
+
+| Type | Input Data | Description |
+|------|-----------|-------------|
+| `text` | `str` | Plain text (default fallback). |
+| `key_value_list` | `list[TonedItem]` | Labeled rows with optional tone-colored values. |
+| `metric_list` | `list[TonedItem]` | Tone-colored metric cards in a flex row. |
+| `badge_list` | `list[TonedItem]` | Inline pill badges with semantic colors. |
+| `percentile_spread` | `PercentileData` | Horizontal track with markers and bands (div-based). |
+| `bell_curve` | `PercentileData` | Plotly normal-distribution chart with markers, bands, and a "your score" line. Falls back to `percentile_spread` when Plotly is unavailable. |
+
+Each item supports a **tone** (`"neutral"`, `"good"`, `"info"`, `"warning"`, `"danger"`) that maps to accessible color pairs.
+
+```python
+from reflex_mui_datagrid import data_grid, TonedItem, PercentileData
+
+# Row data includes structured fields (hidden from grid columns):
+row = {
+    "id": 1,
+    "name": "Coronary artery disease",
+    "risk_details": [
+        TonedItem(label="Best estimate", value="68.2%", tone="warning").model_dump(),
+        TonedItem(label="Confidence", value="High", tone="good").model_dump(),
+    ],
+    "percentiles": PercentileData(
+        score=68.2,
+        items=[
+            TonedItem(label="EUR", value=68.2).model_dump(),
+            TonedItem(label="EAS", value=45.1, tone="info").model_dump(),
+        ],
+        summary="Models agree.",
+    ).model_dump(),
+}
+
+data_grid(
+    rows=[row],
+    columns=[...],
+    detail_columns=["risk_details", "percentiles"],
+    detail_renderers={
+        "risk_details": {"type": "key_value_list"},
+        "percentiles": {
+            "type": "bell_curve",
+            "scaleMin": 0,
+            "scaleMax": 100,
+            "bands": [{"from": 25, "to": 75, "label": "average range"}],
+        },
+    },
+    detail_height=420,
+)
+```
+
+The `DetailRendererConfig` and `PercentileBand` models provide validation and IDE autocomplete, but plain dicts work too.
+
+**Bell curve with Plotly:** The `bell_curve` renderer dynamically imports `react-plotly.js`. If the npm package is not installed, it automatically falls back to the div-based `percentile_spread`. To ensure Plotly is available, include `PlotlyDetailSupport.create()` in your component tree:
+
+```python
+from reflex_mui_datagrid import PlotlyDetailSupport
+
+def index() -> rx.Component:
+    return rx.fragment(
+        PlotlyDetailSupport.create(),
+        data_grid(..., detail_renderers={"pct": {"type": "bell_curve"}}),
+    )
+```
 
 ### Multiple Independent Grids
 
@@ -527,7 +596,7 @@ The demo has six tabs:
 
 | Tab | Description |
 |-----|-------------|
-| **PRS Results** | Polygenic Risk Scores with expandable detail panels (colored badges, interpretation, percentiles) |
+| **PRS Results** | Polygenic Risk Scores with rich detail panels: key-value risk assessment, metric cards, bell curve percentile chart, and badge warnings |
 | **PRS (Lazy + Overrides)** | Same PRS data via `LazyFrameGridMixin` with `column_overrides` -- PGS IDs as clickable links to the PGS Catalog, custom column widths |
 | **Employee Data** | 20-row inline polars LazyFrame with sorting, dropdown filters, checkbox selection |
 | **Genomic Variants (VCF)** | 793 variants loaded via `polars_bio.scan_vcf()`, column descriptions from VCF headers |

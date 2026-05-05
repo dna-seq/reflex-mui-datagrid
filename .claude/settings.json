@@ -1,0 +1,46 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv sync *)",
+      "Bash(grep -n '`' /home/antonkulaga/sources/reflex-mui-datagrid/src/reflex_mui_datagrid/datagrid.py)",
+      "Bash(kill 1593310)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(break)",
+      "Bash(jobs -l)",
+      "Bash(pkill -f \"reflex\")",
+      "Bash(pkill -9 -f \"reflex\")",
+      "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid status)",
+      "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid log --oneline -5)",
+      "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid diff pyproject.toml)",
+      "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid diff --stat)",
+      "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid add README.md pyproject.toml uv.lock CLAUDE.md AGENTS.md .claude/ .github/ src/reflex_mui_datagrid/__init__.py src/reflex_mui_datagrid/datagrid.py src/reflex_mui_datagrid/lazyframe_grid.py src/reflex_mui_datagrid/models.py src/reflex_mui_datagrid/polars_utils.py src/reflex_mui_datagrid/plotly_support.py examples/datagrid_demo/datagrid_demo/datagrid_demo.py tests/)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in */AGENTS.md) cp \"${f%AGENTS.md}AGENTS.md\" \"${f%AGENTS.md}CLAUDE.md\" ;; */CLAUDE.md) cp \"${f%CLAUDE.md}CLAUDE.md\" \"${f%CLAUDE.md}AGENTS.md\" ;; esac; } 2>/dev/null || true",
+            "timeout": 5,
+            "statusMessage": "Syncing AGENTS.md ↔ CLAUDE.md"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f AGENTS.md ] && [ -f CLAUDE.md ]; then if [ AGENTS.md -nt CLAUDE.md ]; then cp AGENTS.md CLAUDE.md; elif [ CLAUDE.md -nt AGENTS.md ]; then cp CLAUDE.md AGENTS.md; fi; elif [ -f AGENTS.md ]; then cp AGENTS.md CLAUDE.md; elif [ -f CLAUDE.md ]; then cp CLAUDE.md AGENTS.md; fi 2>/dev/null || true",
+            "timeout": 5,
+            "statusMessage": "Syncing AGENTS.md ↔ CLAUDE.md"
+          }
+        ]
+      }
+    ]
+  }
+}

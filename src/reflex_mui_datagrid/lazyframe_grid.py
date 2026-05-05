@@ -959,6 +959,7 @@ def lazyframe_grid(
     detail_labels: dict[str, str] | None = None,
     detail_badge_fields: list[str] | None = None,
     detail_badge_colors: dict[str, list[str]] | None = None,
+    detail_renderers: dict[str, Any] | None = None,
     **extra_props: Any,
 ) -> rx.Component:
     """Return a pre-wired ``data_grid(...)`` bound to a :class:`LazyFrameGridMixin` state.
@@ -1011,6 +1012,12 @@ def lazyframe_grid(
         detail_badge_colors: Custom color mapping for badge text.
             Keys are badge text strings, values are ``[fg_color, bg_color]``
             pairs.  Falls back to the built-in heuristic color function.
+        detail_renderers: Rich renderer configuration for detail panel
+            fields.  Keys are field names, values are dicts with a
+            ``type`` key (``"key_value_list"``, ``"metric_list"``,
+            ``"badge_list"``, ``"percentile_spread"``, or ``"text"``).
+            Row values for these fields should contain structured JSON
+            data matching the renderer type.
         **extra_props: Additional props forwarded to ``data_grid()``.
 
     Returns:
@@ -1030,6 +1037,8 @@ def lazyframe_grid(
         detail_props["detail_badge_fields"] = detail_badge_fields
     if detail_badge_colors:
         detail_props["detail_badge_colors"] = detail_badge_colors
+    if detail_renderers:
+        detail_props["detail_renderers"] = detail_renderers
 
     grid = data_grid(
         rows=state_cls.lf_grid_rows,
@@ -1068,16 +1077,25 @@ def lazyframe_grid(
         **extra_props,
     )
 
+    needs_plotly = detail_renderers and any(
+        r.get("type") == "bell_curve"
+        for r in detail_renderers.values()
+        if isinstance(r, dict)
+    )
+    plotly_support_el = None
+    if needs_plotly:
+        from reflex_mui_datagrid.plotly_support import PlotlyDetailSupport
+        plotly_support_el = PlotlyDetailSupport.create()
+
     if not show_filter_panel:
+        if plotly_support_el:
+            return rx.fragment(plotly_support_el, grid)
         return grid
 
-    return rx.fragment(
-        grid,
-        lazyframe_grid_filter_debug(
-            state_cls,
-            show_presets=show_filter_presets,
-        ),
-    )
+    parts = [grid, lazyframe_grid_filter_debug(state_cls, show_presets=show_filter_presets)]
+    if plotly_support_el:
+        parts.insert(0, plotly_support_el)
+    return rx.fragment(*parts)
 
 
 def lazyframe_grid_stats_bar(state_cls: type) -> rx.Component:

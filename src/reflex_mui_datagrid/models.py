@@ -5,7 +5,115 @@ import json
 from typing import Any, Literal
 
 import reflex as rx
+from pydantic import BaseModel
 from reflex.components.props import PropsBase
+
+
+# ---------------------------------------------------------------------------
+# Detail renderer data models
+# ---------------------------------------------------------------------------
+
+
+class TonedItem(BaseModel):
+    """A labeled item with an optional semantic tone for detail renderers.
+
+    Used by ``key_value_list``, ``metric_list``, and ``badge_list``
+    renderer types.
+
+    Tones: ``"neutral"`` | ``"good"`` | ``"info"`` | ``"warning"`` | ``"danger"``
+    (defaults to ``"neutral"`` on the JS side when omitted).
+    """
+
+    label: str
+    value: str | float | None = None
+    tone: Literal["neutral", "good", "info", "warning", "danger"] | None = None
+    subtext: str | None = None
+
+
+class PercentileData(BaseModel):
+    """Structured data for ``percentile_spread`` and ``bell_curve`` renderers.
+
+    The ``score`` field marks the user's position on the distribution.
+    Each item in ``items`` is a labeled data point (e.g. a population or
+    PGS model) plotted on the scale.
+
+    Example::
+
+        PercentileData(
+            score=68.2,
+            items=[
+                TonedItem(label="EUR", value=68.2),
+                TonedItem(label="EAS", value=45.1, tone="info"),
+            ],
+            outliers=["SAS"],
+            summary="Models agree.",
+        )
+    """
+
+    score: float | None = None
+    items: list[TonedItem] = []
+    outliers: list[str] = []
+    summary: str = ""
+    score_label: str | None = None
+
+
+class PercentileBand(BaseModel):
+    """A labeled range on the percentile scale.
+
+    Rendered as a shaded region on ``percentile_spread`` / ``bell_curve``.
+    """
+
+    from_: float
+    to: float
+    label: str = ""
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        d = super().model_dump(**kwargs)
+        d["from"] = d.pop("from_")
+        return d
+
+
+class DetailRendererConfig(BaseModel):
+    """Configuration for a single detail renderer.
+
+    Pass a dict of ``{field: DetailRendererConfig(...).model_dump()}`` to
+    the ``detail_renderers`` prop, or just pass plain dicts -- the JS
+    side accepts either.
+
+    Example::
+
+        detail_renderers={
+            "risk_details": DetailRendererConfig(type="key_value_list").model_dump(),
+            "population_percentiles": DetailRendererConfig(
+                type="bell_curve",
+                scale_min=0,
+                scale_max=100,
+                bands=[PercentileBand(from_=25, to=75, label="average range")],
+            ).model_dump(),
+        }
+    """
+
+    type: Literal[
+        "text",
+        "key_value_list",
+        "metric_list",
+        "badge_list",
+        "percentile_spread",
+        "bell_curve",
+    ]
+    scale_min: float | None = None
+    scale_max: float | None = None
+    bands: list[PercentileBand] | None = None
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        d = super().model_dump(exclude_none=True, **kwargs)
+        if "scale_min" in d:
+            d["scaleMin"] = d.pop("scale_min")
+        if "scale_max" in d:
+            d["scaleMax"] = d.pop("scale_max")
+        if "bands" in d:
+            d["bands"] = [b.model_dump() for b in (self.bands or [])]
+        return d
 
 
 class UrlCellRenderer(rx.Var):
