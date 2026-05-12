@@ -141,7 +141,15 @@ class TestDetailRenderersConfig:
 
     @pytest.mark.parametrize(
         "renderer_type",
-        ["text", "key_value_list", "metric_list", "badge_list", "percentile_spread", "bell_curve"],
+        [
+            "text",
+            "key_value_list",
+            "metric_list",
+            "badge_list",
+            "link_list",
+            "percentile_spread",
+            "bell_curve",
+        ],
     )
     def test_renderer_config_serializable(self, renderer_type: str) -> None:
         import json
@@ -162,6 +170,11 @@ class TestDetailRenderersConfig:
         renderers: dict[str, Any] = {
             "risk_details": {"type": "key_value_list"},
             "risk_methods": {"type": "metric_list"},
+            "pgs_links": {
+                "type": "link_list",
+                "baseUrl": "https://www.pgscatalog.org/score/",
+                "suffixUrl": "/",
+            },
             "population_percentiles": {
                 "type": "percentile_spread",
                 "scaleMin": 0,
@@ -237,6 +250,7 @@ class TestBellCurveSupport:
             "_resolvePlotComponent",
             "_renderPercentileSpread",
             "_renderBadgeList",
+            "_renderLinkList",
             "_renderKeyValueList",
             "_renderMetricList",
             "_computeDetailPanelHeight",
@@ -259,6 +273,14 @@ class TestBellCurveSupport:
 
         assert 'margin: "0 auto"' not in _INLINE_WRAPPER_JS
         assert 'margin: "0"' in _INLINE_WRAPPER_JS
+
+    def test_percentile_renderers_have_right_side_panel(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert "_buildPercentileSidePanel" in _INLINE_WRAPPER_JS
+        assert "sideItems" in _INLINE_WRAPPER_JS
+        assert "sidePanelTitle" in _INLINE_WRAPPER_JS
+        assert 'flex: "0 0 220px"' in _INLINE_WRAPPER_JS
 
 
 class TestFilterableColumnControls:

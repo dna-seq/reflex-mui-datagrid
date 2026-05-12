@@ -1,10 +1,9 @@
-"""Optional Plotly support for bell curve detail renderers.
+"""Optional compatibility component for bell curve detail renderers.
 
-Include ``PlotlyDetailSupport.create()`` in your component tree to
-ensure ``react-plotly.js`` is installed in ``.web/node_modules/``.
-This is only needed when using ``detail_renderers`` with
-``type: "bell_curve"`` and you don't already use ``rx.plotly``
-elsewhere in your app.
+``DataGrid`` installs the frontend Plotly packages because the injected
+wrapper contains the dynamic ``react-plotly.js`` import. This no-op
+component is kept for users who already added it explicitly in their
+component tree.
 
 Example::
 
@@ -24,10 +23,7 @@ import reflex as rx
 
 
 class PlotlyDetailSupport(rx.Component):
-    """Invisible component that triggers ``react-plotly.js`` npm installation.
-
-    Renders nothing — exists only to make Reflex install the npm packages.
-    """
+    """Invisible compatibility component for explicit Plotly setup."""
 
     library: str = "react-plotly.js@^2.6.0"
     tag: str = "_PlotlyNoop"

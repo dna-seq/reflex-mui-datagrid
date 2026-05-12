@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 demo = "datagrid_demo.cli:main"
+start = "datagrid_demo.cli:main"
 
 [tool.uv.sources]
 reflex-mui-datagrid = { workspace = true }

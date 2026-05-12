@@ -737,6 +737,51 @@ function _renderBadgeList(data) {
   }, ...badges);
 }
 
+// ---- Rich detail renderer: link_list ----
+function _renderLinkList(data, config) {
+  if (!Array.isArray(data)) return null;
+  const links = [];
+  const baseUrl = (config && config.baseUrl) || "";
+  const suffixUrl = (config && config.suffixUrl) || "";
+  const target = (config && config.target) || "_blank";
+  data.forEach(function(item, i) {
+    if (!item) return;
+    const label = item.label != null ? String(item.label) : String(item.value || "");
+    if (!label) return;
+    const href = item.url || (baseUrl ? (baseUrl + label + suffixUrl) : "");
+    if (i > 0) {
+      links.push(React.createElement("span", {
+        key: "sep_" + i,
+        style: { color: "rgba(0,0,0,0.45)" },
+      }, ", "));
+    }
+    if (href) {
+      links.push(React.createElement("a", {
+        key: "link_" + i,
+        href: href,
+        target: target,
+        rel: "noopener noreferrer",
+        style: {
+          color: item.color || "#1565c0",
+          textDecoration: "none",
+          fontWeight: 600,
+        },
+      }, label));
+    } else {
+      links.push(React.createElement("span", {
+        key: "label_" + i,
+        style: { fontWeight: 600 },
+      }, label));
+    }
+  });
+  return React.createElement("div", {
+    style: {
+      display: "flex", flexWrap: "wrap", alignItems: "center",
+      gap: 0, padding: "4px 0", fontSize: 13, lineHeight: 1.6,
+    },
+  }, ...links);
+}
+
 // ---- Rich detail renderer: key_value_list ----
 function _renderKeyValueList(data) {
   if (!Array.isArray(data)) return null;
@@ -790,6 +835,88 @@ function _renderMetricList(data) {
   return React.createElement("div", {
     style: { display: "flex", flexWrap: "wrap", gap: 10, padding: "4px 0" },
   }, ...cards);
+}
+
+function _formatDetailValue(value) {
+  if (value == null || value === "") return "N/A";
+  return String(value);
+}
+
+function _buildPercentileSidePanel(data, config, items, outlierSet) {
+  if (config && config.showSidePanel === false) return null;
+
+  var sideItems = Array.isArray(data.sideItems) ? data.sideItems : null;
+  if (!sideItems) {
+    var score = data.score != null ? data.score : data.median;
+    sideItems = [
+      {
+        label: "Your percentile",
+        value: score != null ? Math.round(Number(score)) + "th" : "Not available",
+        tone: score == null ? "neutral" : (Number(score) < 25 ? "good" : (Number(score) < 75 ? "warning" : "danger")),
+      },
+      { label: "Reference populations", value: String(items.length), tone: "info" },
+      {
+        label: "Outliers",
+        value: String(outlierSet.size),
+        tone: outlierSet.size > 0 ? "warning" : "good",
+      },
+    ];
+  }
+
+  var cards = sideItems.map(function(item, i) {
+    var tc = _toneStyle(item.tone);
+    return React.createElement("div", {
+      key: "side_" + i,
+      style: {
+        padding: "8px 10px",
+        borderRadius: 6,
+        background: tc.bg,
+        border: "1px solid " + tc.border,
+      },
+    },
+      React.createElement("div", {
+        style: { fontSize: 10, color: "rgba(0,0,0,0.55)", fontWeight: 600, marginBottom: 2 },
+      }, item.label || ""),
+      React.createElement("div", {
+        style: { fontSize: 14, color: tc.fg, fontWeight: 700, lineHeight: 1.25 },
+      }, _formatDetailValue(item.value)),
+      item.subtext ? React.createElement("div", {
+        style: { fontSize: 10, color: "rgba(0,0,0,0.52)", marginTop: 3, lineHeight: 1.25 },
+      }, item.subtext) : null
+    );
+  });
+
+  var summary = data.summary ? React.createElement("div", {
+    style: {
+      padding: "8px 10px",
+      borderRadius: 6,
+      background: "#fafafa",
+      border: "1px solid rgba(0,0,0,0.10)",
+      fontSize: 11,
+      color: "rgba(0,0,0,0.62)",
+      lineHeight: 1.35,
+      fontStyle: "italic",
+    },
+  }, data.summary) : null;
+
+  var title = (config && config.sidePanelTitle) || "Interpretation";
+  return React.createElement("div", {
+    style: {
+      flex: "0 0 220px",
+      maxWidth: 260,
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+      alignSelf: "stretch",
+      paddingTop: 6,
+    },
+  },
+    React.createElement("div", {
+      style: { fontSize: 11, fontWeight: 700, color: "rgba(0,0,0,0.62)", letterSpacing: "0.02em" },
+    }, title),
+    ...cards,
+    summary
+  );
 }
 
 // ---- Rich detail renderer: percentile_spread ----
@@ -895,9 +1022,22 @@ function _renderPercentileSpread(data, config) {
     style: { fontSize: 11, color: "rgba(0,0,0,0.55)", marginTop: 6, fontStyle: "italic" },
   }, data.summary) : null;
 
-  return React.createElement("div", {
-    style: { padding: "8px 0", maxWidth: 500 },
+  var chart = React.createElement("div", {
+    style: { padding: "8px 0", flex: "1 1 420px", minWidth: 320, maxWidth: 560 },
   }, track, legendRow, scaleLabels, summaryEl);
+  var sidePanel = _buildPercentileSidePanel(data, config, items, outlierSet);
+
+  return React.createElement("div", {
+    style: {
+      padding: "8px 0",
+      width: "100%",
+      maxWidth: (config && config.maxWidth) || 860,
+      display: "flex",
+      gap: 18,
+      alignItems: "flex-start",
+      flexWrap: "wrap",
+    },
+  }, chart, sidePanel);
 }
 
 // ---- Rich detail renderer: bell_curve ----
@@ -1092,14 +1232,8 @@ function _BellCurveRenderer(props) {
   var summaryEl = data.summary ? React.createElement("div", {
     style: { fontSize: 11, color: "rgba(0,0,0,0.55)", marginTop: 4, fontStyle: "italic" },
   }, data.summary) : null;
-
-  return React.createElement("div", {
-    style: {
-      padding: "6px 0",
-      width: "100%",
-      maxWidth: maxWidth,
-      margin: "0",
-    },
+  var chart = React.createElement("div", {
+    style: { flex: "1 1 520px", minWidth: 380 },
   },
     React.createElement(_PlotComponent, {
       data: traces, layout: layout,
@@ -1109,6 +1243,20 @@ function _BellCurveRenderer(props) {
     }),
     summaryEl
   );
+  var sidePanel = _buildPercentileSidePanel(data, config, items, outlierSet);
+
+  return React.createElement("div", {
+    style: {
+      padding: "6px 0",
+      width: "100%",
+      maxWidth: maxWidth,
+      margin: "0",
+      display: "flex",
+      gap: 18,
+      alignItems: "flex-start",
+      flexWrap: "wrap",
+    },
+  }, chart, sidePanel);
 }
 
 function _smartBadgeColor(text) {
@@ -1169,6 +1317,8 @@ function _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeF
       var rtype = rendererCfg.type;
       if (rtype === "badge_list" && Array.isArray(parsed)) {
         richEl = _renderBadgeList(parsed);
+      } else if (rtype === "link_list" && Array.isArray(parsed)) {
+        richEl = _renderLinkList(parsed, rendererCfg);
       } else if (rtype === "key_value_list" && Array.isArray(parsed)) {
         richEl = _renderKeyValueList(parsed);
       } else if (rtype === "metric_list" && Array.isArray(parsed)) {
@@ -1645,6 +1795,8 @@ class DataGrid(rx.Component):
         "@mui/material@^7.0.0",
         "@emotion/react@^11.14.0",
         "@emotion/styled@^11.14.0",
+        "react-plotly.js@^2.6.0",
+        "plotly.js-dist-min@^3.0.0",
     ]
 
     @property

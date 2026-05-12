@@ -215,6 +215,26 @@ def _build_prs_lazyframe() -> pl.LazyFrame:
             "items": pop_pct_items,
             "outliers": outlier_labels,
             "summary": pop_summary,
+            "sideItems": [
+                {
+                    "label": "Your percentile",
+                    "value": f"{pct}%" if pct > 0 else "Not available",
+                    "tone": risk_tone if pct > 0 else "neutral",
+                    "subtext": risk_tag,
+                },
+                {
+                    "label": "Scoring method",
+                    "value": rec["method"],
+                    "tone": "info",
+                    "subtext": f"Match rate {rec['match']:.0f}%",
+                },
+                {
+                    "label": "Model quality",
+                    "value": quality,
+                    "tone": conf_tone,
+                    "subtext": f"AUROC {auroc_val:.3f}" if auroc_val else "AUROC unavailable",
+                },
+            ],
         }
 
         warnings = []
@@ -365,117 +385,6 @@ def _build_employee_lazyframe() -> pl.LazyFrame:
             ],
         }
     )
-
-
-# ---------------------------------------------------------------------------
-# Substates for server-side grids
-# ---------------------------------------------------------------------------
-
-
-class PrsLazyState(LazyFrameGridMixin, rx.State):
-    """Server-side lazy grid for PRS data, demonstrating column_overrides.
-
-    Uses ``column_overrides`` to render PGS IDs as clickable links to the
-    PGS Catalog (``https://www.pgscatalog.org/score/{pgs_id}/``) and
-    customise column widths.
-    """
-
-    prs_lazy_loaded: bool = False
-
-    def load_prs_lazy(self):
-        """Build the PRS LazyFrame and load with column_overrides."""
-        lf = _build_prs_lazyframe()
-        yield from self.set_lazyframe(
-            lf,
-            chunk_size=50,
-            column_overrides={
-                "PGS ID": {
-                    "width": 140,
-                    "cellRendererType": "url",
-                    "cellRendererConfig": {
-                        "baseUrl": "https://www.pgscatalog.org/score/",
-                        "suffixUrl": "/",
-                        "color": "#1565c0",
-                    },
-                },
-                "Trait": {"minWidth": 180, "flex": 2},
-                "PRS Score": {"width": 110},
-                "Percentile": {"width": 110},
-                "AUROC": {"width": 100},
-                "Quality": {"width": 100},
-                "Match Rate": {"width": 120},
-                "risk_hint": {"hide": True},
-                "interpretation": {"hide": True},
-                "estimated_percentile": {"hide": True},
-                "reference_source": {"hide": True},
-            },
-            non_filterable_fields=[
-                "risk_hint",
-                "interpretation",
-                "estimated_percentile",
-                "reference_source",
-            ],
-        )
-        self.prs_lazy_loaded = True  # type: ignore[assignment]
-
-
-class ParquetState(LazyFrameGridMixin, rx.State):
-    """Server-side lazy grid for the Longevity Map parquet dataset.
-
-    Each ``LazyFrameGridMixin`` substate gets its own independent set
-    of ``lf_grid_*`` state vars and its own LazyFrame cache (keyed by
-    class name).
-    """
-
-    pq_loaded: bool = False
-    pq_loading_init: bool = False
-
-    def load_parquet(self):
-        """Scan the parquet from HuggingFace and prepare for lazy browsing."""
-        self.pq_loading_init = True  # type: ignore[assignment]
-        yield
-
-        lf = pl.scan_parquet(PARQUET_HF_URL)
-        yield from self.set_lazyframe(
-            lf,
-            column_overrides={
-                "rsid": {
-                    "width": 140,
-                    "cellRendererType": "url",
-                    "cellRendererConfig": {
-                        "baseUrl": "https://www.ebi.ac.uk/gwas/variants/",
-                        "color": "#1565c0",
-                    },
-                },
-            },
-        )
-        self.pq_loaded = True  # type: ignore[assignment]
-        self.pq_loading_init = False  # type: ignore[assignment]
-
-
-class GenomeState(LazyFrameGridMixin, rx.State):
-    """Server-side lazy grid for the full genome VCF (~4.5 M rows).
-
-    Each ``LazyFrameGridMixin`` substate gets its own independent set
-    of ``lf_grid_*`` state vars and its own LazyFrame cache.
-    """
-
-    genome_available: bool = False
-
-    def check_genome(self) -> None:
-        """Check if the genome file exists on disk."""
-        self.genome_available = GENOME_PATH.exists()
-
-    def load_genome(self):
-        """Scan the genome VCF and prepare for lazy browsing."""
-        if not GENOME_PATH.exists():
-            self.lf_grid_selected_info = (  # type: ignore[assignment]
-                "Genome file not found. Run: uv run demo download-genome"
-            )
-            return
-
-        lf, descriptions = scan_file(GENOME_PATH)
-        yield from self.set_lazyframe(lf, descriptions)
 
 
 # ---------------------------------------------------------------------------
@@ -701,6 +610,117 @@ class AppState(rx.State):
 
 
 # ---------------------------------------------------------------------------
+# Substates for server-side grids (must inherit AppState, not rx.State)
+# ---------------------------------------------------------------------------
+
+
+class PrsLazyState(LazyFrameGridMixin, AppState):
+    """Server-side lazy grid for PRS data, demonstrating column_overrides.
+
+    Uses ``column_overrides`` to render PGS IDs as clickable links to the
+    PGS Catalog (``https://www.pgscatalog.org/score/{pgs_id}/``) and
+    customise column widths.
+    """
+
+    prs_lazy_loaded: bool = False
+
+    def load_prs_lazy(self):
+        """Build the PRS LazyFrame and load with column_overrides."""
+        lf = _build_prs_lazyframe()
+        yield from self.set_lazyframe(
+            lf,
+            chunk_size=50,
+            column_overrides={
+                "PGS ID": {
+                    "width": 140,
+                    "cellRendererType": "url",
+                    "cellRendererConfig": {
+                        "baseUrl": "https://www.pgscatalog.org/score/",
+                        "suffixUrl": "/",
+                        "color": "#1565c0",
+                    },
+                },
+                "Trait": {"minWidth": 180, "flex": 2},
+                "PRS Score": {"width": 110},
+                "Percentile": {"width": 110},
+                "AUROC": {"width": 100},
+                "Quality": {"width": 100},
+                "Match Rate": {"width": 120},
+                "risk_hint": {"hide": True},
+                "interpretation": {"hide": True},
+                "estimated_percentile": {"hide": True},
+                "reference_source": {"hide": True},
+            },
+            non_filterable_fields=[
+                "risk_hint",
+                "interpretation",
+                "estimated_percentile",
+                "reference_source",
+            ],
+        )
+        self.prs_lazy_loaded = True  # type: ignore[assignment]
+
+
+class ParquetState(LazyFrameGridMixin, AppState):
+    """Server-side lazy grid for the Longevity Map parquet dataset.
+
+    Each ``LazyFrameGridMixin`` substate gets its own independent set
+    of ``lf_grid_*`` state vars and its own LazyFrame cache (keyed by
+    class name).
+    """
+
+    pq_loaded: bool = False
+    pq_loading_init: bool = False
+
+    def load_parquet(self):
+        """Scan the parquet from HuggingFace and prepare for lazy browsing."""
+        self.pq_loading_init = True  # type: ignore[assignment]
+        yield
+
+        lf = pl.scan_parquet(PARQUET_HF_URL)
+        yield from self.set_lazyframe(
+            lf,
+            column_overrides={
+                "rsid": {
+                    "width": 140,
+                    "cellRendererType": "url",
+                    "cellRendererConfig": {
+                        "baseUrl": "https://www.ebi.ac.uk/gwas/variants/",
+                        "color": "#1565c0",
+                    },
+                },
+            },
+        )
+        self.pq_loaded = True  # type: ignore[assignment]
+        self.pq_loading_init = False  # type: ignore[assignment]
+
+
+class GenomeState(LazyFrameGridMixin, AppState):
+    """Server-side lazy grid for the full genome VCF (~4.5 M rows).
+
+    Each ``LazyFrameGridMixin`` substate gets its own independent set
+    of ``lf_grid_*`` state vars and its own LazyFrame cache.
+    """
+
+    genome_available: bool = False
+
+    def check_genome(self) -> None:
+        """Check if the genome file exists on disk."""
+        self.genome_available = GENOME_PATH.exists()
+
+    def load_genome(self):
+        """Scan the genome VCF and prepare for lazy browsing."""
+        if not GENOME_PATH.exists():
+            self.lf_grid_selected_info = (  # type: ignore[assignment]
+                "Genome file not found. Run: uv run demo download-genome"
+            )
+            return
+
+        lf, descriptions = scan_file(GENOME_PATH)
+        yield from self.set_lazyframe(lf, descriptions)
+
+
+# ---------------------------------------------------------------------------
 # UI components
 # ---------------------------------------------------------------------------
 
@@ -766,6 +786,8 @@ def prs_tab() -> rx.Component:
                         "type": "bell_curve",
                         "scaleMin": 0,
                         "scaleMax": 100,
+                        "height": 240,
+                        "sidePanelTitle": "PRS context",
                         "bands": [
                             {"from": 25, "to": 75, "label": "average range"},
                             {"from": 75, "to": 90, "label": "above average"},
@@ -774,7 +796,7 @@ def prs_tab() -> rx.Component:
                     },
                     "trait_warnings": {"type": "badge_list"},
                 },
-                detail_height=420,
+                detail_height=520,
                 height="600px",
             ),
             rx.text("Loading data...", color="var(--gray-9)", font_style="italic"),

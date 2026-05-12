@@ -129,7 +129,7 @@ grid = show_dataframe(
 - **JSON-safe serialization** -- temporal columns become ISO strings, `List` columns become comma-joined strings, `Struct` columns become strings
 - **Column, row, and selection events** -- handlers for row click, cell click, sorting, filtering, pagination, and row selection
 - **Expandable row detail panels** -- click a chevron to reveal additional fields below any row, with configurable badge rendering and custom colors
-- **Rich detail renderers** -- `detail_renderers` prop supports six renderer types for structured row data: `key_value_list`, `metric_list`, `badge_list`, `percentile_spread`, `bell_curve`, and `text`. Optional Plotly-based bell curve charts when `react-plotly.js` is available (auto-fallback to div-based spread)
+- **Rich detail renderers** -- `detail_renderers` prop supports six renderer types for structured row data: `key_value_list`, `metric_list`, `badge_list`, `percentile_spread`, `bell_curve`, and `text`. Plotly-based bell curve charts are installed with the grid and fall back to the div-based spread if Plotly cannot load at runtime.
 
 ## Server-Side Scroll-Loading (Large Datasets)
 
@@ -443,7 +443,7 @@ data_grid(
 
 The `DetailRendererConfig` and `PercentileBand` models provide validation and IDE autocomplete, but plain dicts work too.
 
-**Bell curve with Plotly:** The `bell_curve` renderer dynamically imports `react-plotly.js`. If the npm package is not installed, it automatically falls back to the div-based `percentile_spread`. To ensure Plotly is available, include `PlotlyDetailSupport.create()` in your component tree:
+**Bell curve with Plotly:** The `bell_curve` renderer dynamically imports `react-plotly.js`, and the DataGrid wrapper installs the needed frontend Plotly packages automatically. If Plotly cannot load at runtime, it falls back to the div-based `percentile_spread`. `PlotlyDetailSupport` remains available as a no-op compatibility component for apps that already include it explicitly:
 
 ```python
 from reflex_mui_datagrid import PlotlyDetailSupport

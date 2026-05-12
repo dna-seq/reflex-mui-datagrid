@@ -1102,7 +1102,8 @@ def lazyframe_grid(
         detail_renderers: Rich renderer configuration for detail panel
             fields.  Keys are field names, values are dicts with a
             ``type`` key (``"key_value_list"``, ``"metric_list"``,
-            ``"badge_list"``, ``"percentile_spread"``, or ``"text"``).
+            ``"badge_list"``, ``"link_list"``, ``"percentile_spread"``,
+            or ``"text"``).
             Row values for these fields should contain structured JSON
             data matching the renderer type.
         **extra_props: Additional props forwarded to ``data_grid()``.

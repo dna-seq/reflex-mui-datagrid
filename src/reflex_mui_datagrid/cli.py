@@ -69,6 +69,8 @@ def _detect_format(path: Path) -> str:
 
 _BIO_FORMATS: set[str] = {"vcf", "bam", "gff", "bed", "fasta", "fastq"}
 
+_DEFAULT_HOST = "0.0.0.0"
+
 
 def _build_app_code(
     file_path: Path,
@@ -162,11 +164,17 @@ def view(
         typer.Option("--limit", "-n", help="Maximum number of rows to load"),
     ] = None,
     height: Annotated[
-        str, typer.Option("--height", "-h", help="CSS height of the grid")
+        str, typer.Option("--height", help="CSS height of the grid")
     ] = "calc(100vh - 200px)",
+    host: Annotated[
+        str, typer.Option("--host", "-h", help="Host to bind")
+    ] = _DEFAULT_HOST,
     port: Annotated[
-        int, typer.Option("--port", "-p", help="Port for the Reflex frontend")
-    ] = 3000,
+        Optional[int], typer.Option("--port", "-p", help="Frontend port (auto if omitted)")
+    ] = None,
+    backend_port: Annotated[
+        Optional[int], typer.Option("--backend-port", help="Backend port (auto if omitted)")
+    ] = None,
     title: Annotated[
         Optional[str], typer.Option("--title", "-t", help="Page title")
     ] = None,
@@ -210,12 +218,9 @@ def view(
     (app_pkg / f"{app_name}.py").write_text(app_code)
 
     rxconfig_code = f"""import reflex as rx
-config = rx.Config(app_name="{app_name}", frontend_port={port})
+config = rx.Config(app_name="{app_name}")
 """
     (tmp_dir / "rxconfig.py").write_text(rxconfig_code)
-
-    typer.echo(f"Launching viewer for: {file}")
-    typer.echo(f"Format: {fmt} | Limit: {limit or 'all'} | Port: {port}")
 
     os.chdir(tmp_dir)
 
@@ -228,9 +233,21 @@ config = rx.Config(app_name="{app_name}", frontend_port={port})
         check=True,
     )
 
-    # Step 2: run the app via exec (replaces this process).
-    typer.echo("Starting viewer...")
-    os.execvp(sys.executable, [sys.executable, "-m", "reflex", "run"])
+    # Step 2: run with Reflex's built-in auto-increment for ports.
+    typer.echo(f"Launching viewer for: {file}")
+    typer.echo(f"Format: {fmt} | Limit: {limit or 'all'}")
+
+    from reflex import constants
+    from reflex.reflex import _run
+    from reflex_base.config import environment
+
+    environment.REFLEX_COMPILE_CONTEXT.set(constants.CompileContext.RUN)
+    _run(
+        env=constants.Env.DEV,
+        frontend_port=port,
+        backend_port=backend_port,
+        backend_host=host,
+    )
 
 
 def main() -> None:

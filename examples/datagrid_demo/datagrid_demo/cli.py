@@ -11,6 +11,7 @@ import json
 import os
 import urllib.request
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -26,28 +27,56 @@ GENOME_PATH: Path = DATA_DIR / "antonkulaga.vcf"
 # JSON sidecar for HTTP caching metadata (ETag, size).
 GENOME_META_PATH: Path = DATA_DIR / ".antonkulaga.vcf.meta.json"
 
+_DEFAULT_HOST = "0.0.0.0"
 
-def _run_app() -> None:
-    """Start the Reflex demo app."""
+
+def _run_app(
+    host: str = _DEFAULT_HOST,
+    frontend_port: int | None = None,
+    backend_port: int | None = None,
+) -> None:
+    """Start the Reflex demo app.
+
+    When ports are not specified, Reflex auto-increments to the next
+    available port (e.g. 3001/8001 if 3000/8000 are already in use).
+    Passing an explicit port pins it — no auto-increment.
+    """
     app_dir = Path(__file__).resolve().parent.parent
     os.chdir(app_dir)
 
-    from reflex.reflex import cli
+    from reflex import constants
+    from reflex.reflex import _run
+    from reflex_base.config import environment
 
-    cli(["run"])
+    environment.REFLEX_COMPILE_CONTEXT.set(constants.CompileContext.RUN)
+    _run(
+        env=constants.Env.DEV,
+        frontend_port=frontend_port,
+        backend_port=backend_port,
+        backend_host=host,
+    )
 
 
 @app.callback(invoke_without_command=True)
-def default(ctx: typer.Context) -> None:
+def default(
+    ctx: typer.Context,
+    host: Annotated[str, typer.Option("--host", "-h", help="Host to bind")] = _DEFAULT_HOST,
+    port: Annotated[int | None, typer.Option("--port", "-p", help="Frontend port (auto if omitted)")] = None,
+    backend_port: Annotated[int | None, typer.Option("--backend-port", help="Backend port (auto if omitted)")] = None,
+) -> None:
     """Run the demo app (default when no subcommand is given)."""
     if ctx.invoked_subcommand is None:
-        _run_app()
+        _run_app(host, port, backend_port)
 
 
 @app.command()
-def run() -> None:
+def run(
+    host: Annotated[str, typer.Option("--host", "-h", help="Host to bind")] = _DEFAULT_HOST,
+    port: Annotated[int | None, typer.Option("--port", "-p", help="Frontend port (auto if omitted)")] = None,
+    backend_port: Annotated[int | None, typer.Option("--backend-port", help="Backend port (auto if omitted)")] = None,
+) -> None:
     """Run the Reflex demo app."""
-    _run_app()
+    _run_app(host, port, backend_port)
 
 
 def _read_cache_meta() -> dict[str, str]:

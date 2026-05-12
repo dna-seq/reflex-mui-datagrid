@@ -98,12 +98,16 @@ class DetailRendererConfig(BaseModel):
         "key_value_list",
         "metric_list",
         "badge_list",
+        "link_list",
         "percentile_spread",
         "bell_curve",
     ]
     scale_min: float | None = None
     scale_max: float | None = None
     bands: list[PercentileBand] | None = None
+    base_url: str | None = None
+    suffix_url: str | None = None
+    target: str | None = None
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:
         d = super().model_dump(exclude_none=True, **kwargs)
@@ -111,6 +115,10 @@ class DetailRendererConfig(BaseModel):
             d["scaleMin"] = d.pop("scale_min")
         if "scale_max" in d:
             d["scaleMax"] = d.pop("scale_max")
+        if "base_url" in d:
+            d["baseUrl"] = d.pop("base_url")
+        if "suffix_url" in d:
+            d["suffixUrl"] = d.pop("suffix_url")
         if "bands" in d:
             d["bands"] = [b.model_dump() for b in (self.bands or [])]
         return d
