@@ -33,7 +33,7 @@ Typical usage::
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import polars as pl
 import reflex as rx
@@ -85,6 +85,59 @@ def _get_cache(cache_id: str) -> _LazyFrameCache:
     if cache_id not in _cache_registry:
         _cache_registry[cache_id] = _LazyFrameCache()
     return _cache_registry[cache_id]
+
+
+def _resolve_fields(
+    fields: Iterable[str],
+    schema: pl.Schema | None,
+) -> set[str]:
+    """Resolve field names case-insensitively against *schema*."""
+    resolved: set[str] = set()
+    for raw_field in fields:
+        field = (
+            _resolve_field_name(raw_field, schema)
+            if schema is not None
+            else raw_field
+        )
+        if field:
+            resolved.add(field)
+    return resolved
+
+
+def _is_filterable_field(cache: _LazyFrameCache, raw_field: str) -> bool:
+    """Return whether *raw_field* belongs to a filterable grid column."""
+    field = (
+        _resolve_field_name(raw_field, cache.schema)
+        if cache.schema is not None
+        else raw_field
+    )
+    if field is None:
+        return False
+    for col_def in cache.col_defs:
+        if col_def.get("field") == field:
+            return col_def.get("filterable", True) is not False
+    return False
+
+
+def _filter_model_for_filterable_columns(
+    filter_model: dict[str, Any],
+    cache: _LazyFrameCache,
+) -> dict[str, Any]:
+    """Drop filter items targeting columns marked ``filterable=False``."""
+    items = filter_model.get("items", [])
+    if not isinstance(items, list):
+        return {**filter_model, "items": []}
+
+    filtered_items = [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and item.get("field")
+        and _is_filterable_field(cache, str(item["field"]))
+    ]
+    if len(filtered_items) == len(items):
+        return filter_model
+    return {**filter_model, "items": filtered_items}
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +383,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         value_options_max_unique: int = _DEFAULT_VALUE_OPTIONS_MAX_UNIQUE,
         eager_value_options_row_limit: int = _DEFAULT_EAGER_VALUE_OPTIONS_ROW_LIMIT,
         column_overrides: dict[str, dict[str, Any]] | None = None,
+        non_filterable_fields: Iterable[str] | None = None,
     ):
         """Prepare a LazyFrame for server-side browsing.
 
@@ -370,6 +424,9 @@ class LazyFrameGridMixin(rx.State, mixin=True):
                 ``cellRendererConfig``, ``hide``).  Overrides are applied
                 before storing in the cache, so they survive all internal
                 operations (value options computation, filter upgrades).
+            non_filterable_fields: Optional iterable of field names whose
+                column filters should be disabled.  Field names are resolved
+                case-insensitively against the LazyFrame schema.
         """
         self.lf_grid_loading = True  # type: ignore[assignment]
         self.lf_grid_selected_info = "Preparing LazyFrame..."  # type: ignore[assignment]
@@ -400,6 +457,15 @@ class LazyFrameGridMixin(rx.State, mixin=True):
                 field = col.get("field", "")
                 if field in column_overrides:
                     cache.col_defs[i] = {**col, **column_overrides[field]}
+
+        if non_filterable_fields:
+            resolved_non_filterable = _resolve_fields(
+                non_filterable_fields,
+                cache.schema,
+            )
+            for i, col in enumerate(cache.col_defs):
+                if col.get("field") in resolved_non_filterable:
+                    cache.col_defs[i] = {**col, "filterable": False}
 
         self.lf_grid_columns = cache.col_defs  # type: ignore[assignment]
         self.lf_grid_loaded = True  # type: ignore[assignment]
@@ -464,8 +530,18 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         self.lf_grid_stats = "Filtering..."  # type: ignore[assignment]
         yield
 
+        raw_items = filter_model.get("items", [])
+        had_incoming_items = isinstance(raw_items, list) and bool(raw_items)
+        cache_id = self._lf_grid_cache_id
+        cache = _get_cache(cache_id) if cache_id else None
+        if cache is not None:
+            filter_model = _filter_model_for_filterable_columns(filter_model, cache)
+
         # Keep the MUI frontend filter model in sync (controlled component).
         self.lf_grid_filter_model = filter_model  # type: ignore[assignment]
+        if had_incoming_items and not filter_model.get("items"):
+            self.lf_grid_loading = False  # type: ignore[assignment]
+            return
 
         # Lazily compute value options for any newly-filtered columns.
         self._ensure_value_options_for_filter(filter_model)
@@ -541,6 +617,9 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             return
         cache = _get_cache(cache_id)
         if cache.lf is None or cache.schema is None:
+            return
+
+        if not _is_filterable_field(cache, field):
             return
 
         resolved = _resolve_field_name(field, cache.schema) if cache.schema else field
@@ -659,6 +738,11 @@ class LazyFrameGridMixin(rx.State, mixin=True):
 
         filter_model: dict[str, Any] = preset.get("filter_model", {})
         sort_model: list[dict[str, Any]] = preset.get("sort_model", [])
+
+        cache_id = self._lf_grid_cache_id
+        cache = _get_cache(cache_id) if cache_id else None
+        if cache is not None:
+            filter_model = _filter_model_for_filterable_columns(filter_model, cache)
 
         self._lf_grid_filter = filter_model  # type: ignore[assignment]
         self._lf_grid_sort = sort_model  # type: ignore[assignment]
@@ -779,6 +863,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         if cache.lf is None or cache.schema is None:
             return
 
+        filter_model = _filter_model_for_filterable_columns(filter_model, cache)
         items: list[dict[str, Any]] = filter_model.get("items", [])
         columns_updated = False
 
@@ -833,6 +918,8 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         columns_updated = False
 
         for col_name, dtype in cache.schema.items():
+            if not _is_filterable_field(cache, col_name):
+                continue
             if not isinstance(dtype, (pl.String, pl.Categorical, pl.Enum)):
                 continue
             if col_name in cache._value_options_cache:

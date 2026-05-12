@@ -13,7 +13,12 @@
       "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid log --oneline -5)",
       "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid diff pyproject.toml)",
       "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid diff --stat)",
-      "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid add README.md pyproject.toml uv.lock CLAUDE.md AGENTS.md .claude/ .github/ src/reflex_mui_datagrid/__init__.py src/reflex_mui_datagrid/datagrid.py src/reflex_mui_datagrid/lazyframe_grid.py src/reflex_mui_datagrid/models.py src/reflex_mui_datagrid/polars_utils.py src/reflex_mui_datagrid/plotly_support.py examples/datagrid_demo/datagrid_demo/datagrid_demo.py tests/)"
+      "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid add README.md pyproject.toml uv.lock CLAUDE.md AGENTS.md .claude/ .github/ src/reflex_mui_datagrid/__init__.py src/reflex_mui_datagrid/datagrid.py src/reflex_mui_datagrid/lazyframe_grid.py src/reflex_mui_datagrid/models.py src/reflex_mui_datagrid/polars_utils.py src/reflex_mui_datagrid/plotly_support.py examples/datagrid_demo/datagrid_demo/datagrid_demo.py tests/)",
+      "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid diff --cached --stat)",
+      "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid commit -m ' *)",
+      "Bash(rm -f /home/antonkulaga/sources/reflex-mui-datagrid/dist/*)",
+      "Bash(uv build *)",
+      "Bash(git -C /home/antonkulaga/sources/reflex-mui-datagrid push)"
     ]
   },
   "hooks": {

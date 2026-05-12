@@ -409,6 +409,12 @@ class PrsLazyState(LazyFrameGridMixin, rx.State):
                 "estimated_percentile": {"hide": True},
                 "reference_source": {"hide": True},
             },
+            non_filterable_fields=[
+                "risk_hint",
+                "interpretation",
+                "estimated_percentile",
+                "reference_source",
+            ],
         )
         self.prs_lazy_loaded = True  # type: ignore[assignment]
 

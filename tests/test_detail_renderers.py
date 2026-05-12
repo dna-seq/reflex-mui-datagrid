@@ -230,6 +230,7 @@ class TestBellCurveSupport:
         from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
 
         for name in [
+            "_isColumnFilterable",
             "_BellCurveRenderer",
             "_normalPdf",
             "_percentileToZ",
@@ -238,8 +239,68 @@ class TestBellCurveSupport:
             "_renderBadgeList",
             "_renderKeyValueList",
             "_renderMetricList",
+            "_computeDetailPanelHeight",
+            "_defaultRowHeightForParams",
             "_buildDetailPanelElement",
             "_DetailPanelsSlot",
             "UnlimitedDataGrid",
         ]:
             assert name in _INLINE_WRAPPER_JS, f"Missing function: {name}"
+
+    def test_detail_panels_do_not_expand_host_row_height(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert "effectiveProps.getRowHeight = (params) =>" not in _INLINE_WRAPPER_JS
+        assert "return baseHeight + _detailPanelHeight" not in _INLINE_WRAPPER_JS
+        assert "height: calcHeight" in _INLINE_WRAPPER_JS
+
+    def test_bell_curve_detail_renderer_is_not_centered_in_full_row_width(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert 'margin: "0 auto"' not in _INLINE_WRAPPER_JS
+        assert 'margin: "0"' in _INLINE_WRAPPER_JS
+
+
+class TestFilterableColumnControls:
+    """Filtering opt-outs should be honored by frontend and lazy-grid helpers."""
+
+    def test_custom_filter_icon_respects_filterable_false(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert "col.filterable !== false" in _INLINE_WRAPPER_JS
+        assert "return null;" in _INLINE_WRAPPER_JS
+
+    def test_non_filterable_fields_are_dropped_from_filter_model(self) -> None:
+        from reflex_mui_datagrid.lazyframe_grid import (
+            _LazyFrameCache,
+            _filter_model_for_filterable_columns,
+        )
+
+        cache = _LazyFrameCache()
+        cache.schema = pl.Schema(
+            {
+                "Allowed": pl.String,
+                "Blocked": pl.String,
+            }
+        )
+        cache.col_defs = [
+            {"field": "Allowed", "filterable": True},
+            {"field": "Blocked", "filterable": False},
+        ]
+        filter_model = {
+            "items": [
+                {"field": "Allowed", "operator": "contains", "value": "yes"},
+                {"field": "blocked", "operator": "contains", "value": "no"},
+                {"field": "Missing", "operator": "contains", "value": "ignored"},
+            ],
+            "logicOperator": "and",
+        }
+
+        filtered = _filter_model_for_filterable_columns(filter_model, cache)
+
+        assert filtered == {
+            "items": [
+                {"field": "Allowed", "operator": "contains", "value": "yes"},
+            ],
+            "logicOperator": "and",
+        }

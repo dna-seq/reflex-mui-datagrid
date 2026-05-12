@@ -66,6 +66,7 @@ This project is uv based, it is a reflex wrapper for mui x-data-grid UI componen
 ## MUI X Internals
 
 - **`setPanels` exists in the Community edition virtualizer**: The `setPanels` API lives in `@mui/x-virtualizer` (the shared virtualizer package used by all editions), not gated behind a Pro license. It is a React `useState` setter accepting `Map<GridRowId, ReactNode>`. After rendering each row, the virtualizer checks `panels.get(id)` and appends the panel element. Access it via `apiRef.current.virtualizer.api.getters.setPanels`. This is how MUI Pro implements detail panels — the Pro package only adds `GridDetailPanels` which calls `setPanels`.
+- **Detail panels must not inflate the host row height**: The custom Community detail panel should keep using `setPanels(map)` for the panel content, but must not also return `base row height + detail panel height` from `getRowHeight`. MUI renders the panel below the row, so inflating the host row double-counts space and creates a giant blank spacer.
 - **`rowSelectionModel` requires Set conversion**: MUI DataGrid v8 expects `rowSelectionModel.ids` as a `Set<GridRowId>`, but Python/JSON sends arrays. The JS wrapper must convert arrays to `Set` before passing to MUI.
 - **`row_id_field` with spaces needs bracket notation**: When `row_id_field` contains spaces (e.g. `"PGS ID"`), use `row["PGS ID"]` in JS instead of dot notation to avoid invalid JavaScript.
 
@@ -73,6 +74,7 @@ This project is uv based, it is a reflex wrapper for mui x-data-grid UI componen
 
 - **CSS-only fixes for column header icon alignment DO NOT WORK**: Adding `flex: 1 1 auto` to `.MuiDataGrid-columnHeaderTitleContainerContent` via MUI `sx` prop, global `<style>` injection with `!important`, or generic CSS selectors (`:first-child:not(...)`, `:not(...)`) all fail to push filter/sort icons to the right edge when `renderHeader` produces two-line headers (name + description). MUI v8's styled-component output overrides `sx` regardless of specificity. The **working approach** is a `ref` callback on the `renderHeader` div that imperatively sets `flex: 1 1 auto` on the parent `columnHeaderTitleContainerContent` DOM element (see `_forceParentFlex`).
 - **Synthetic detail rows injected into the rows array DO NOT WORK**: Injecting `__is_detail_row__` synthetic rows into the grid's `rows` array and overriding `getRowHeight`/`getRowClassName`/`renderCell` to render detail content causes severe performance issues and visual overlay glitches. MUI's virtualizer fights the injected rows. The correct approach is to use the `setPanels` API from `@mui/x-virtualizer` (see MUI X Internals above).
+- **Expanded detail host-row height inflation DO NOT WORK**: Combining `setPanels(map)` with custom `getRowHeight` logic that adds the detail panel height to the host row creates a huge blank row because the panel is already rendered separately below the row.
 
 ## Coding Standards
 
@@ -157,8 +159,11 @@ Never claim "tests would have caught this" without running the buggy code agains
 - **Demo app**: Run with `uv sync` then `uv run demo` from the project root. The demo uses `workspace = true` in `pyproject.toml` to depend on the local repo version.
 - **Filter JSON `id` field**: The `id` in MUI filter items is MUI-internal and should be stripped from filter JSON output sent to the user.
 - **Dynamic scrolling monkey-patching**: Dynamic scrolling with `pagination=False` originally used monkey-patching of MUI's pagination logic; this broke when Reflex switched from Next.js to Vite/ESM (CommonJS `require()` no longer available).
-- **MUI DataGrid package**: The wrapper imports bare `@mui/x-data-grid` and targets MUI X DataGrid Community v8, but this repo does not pin an exact npm patch/minor version; Reflex/npm resolves the installed version in `.web/node_modules`.
+- **MUI DataGrid package**: The wrapper targets MUI X DataGrid Community v8 and installs `@mui/x-data-grid@^8.27.0`; imports should still render from bare `@mui/x-data-grid` with `ImportVar(..., install=False)`. Accidentally resolving MUI X 9.x breaks wrapper internals.
 - **Filter panel switches**: `lazyframe_grid(show_filter_panel=False)` hides the whole filter panel, while `show_filter_presets=False` keeps the filter summary and Clear All button but hides JSON upload/copy/download controls.
+- **Server-side toolbar default**: `lazyframe_grid` defaults `show_toolbar=False` because MUI toolbar search/export operate only on browser-loaded rows, not the full server-side LazyFrame result; if explicitly enabled in server mode, quick search is hidden by default.
 - **Column overrides and URL suffixes**: `set_lazyframe(column_overrides=...)` applies overrides into `cache.col_defs` before syncing columns so lazy value-option updates preserve widths/renderers; URL renderers support `suffixUrl` / `suffix_url` for trailing path segments.
+- **Non-filterable lazy-grid fields**: Use `set_lazyframe(non_filterable_fields=[...])` or `ColumnDef.filterable=False` to suppress the custom header filter icon, lazy value-options computation, and server-side filter application for those fields.
 - **Inline JS in Python strings**: Avoid unescaped JS regex sequences such as `\s`, `\d`, `\w`, or `\-` inside Python triple-quoted strings; use alternatives like `[ \t]`, place `-` at the end of character classes, or double-escape backslashes before compiling.
+- **Reflex version checks**: In Reflex 0.9+, do not rely on `reflex.__version__`; use `uv run reflex --version` or `importlib.metadata.version("reflex")`.
 - **Column autosizing pitfalls**: MUI `autosizeOnMount` and programmatic `apiRef.current.autosizeColumns()` were unreliable in the unlimited grid flow and can fight `minWidth`; avoid relying on them for readable lazy-grid column sizing.

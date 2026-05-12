@@ -351,10 +351,22 @@ _FilterPanelWithApply.displayName = "_FilterPanelWithApply";
 // MUI's default header filter button opens a generic filter panel from header
 // context. For always-visible filter icons, we use a custom button that opens
 // the filter panel pre-targeted to the clicked column.
+function _isColumnFilterable(apiRef, field, rootProps) {
+  if (!field || rootProps.disableColumnFilter || rootProps.disable_column_filter) {
+    return false;
+  }
+  const col = apiRef.current.getColumn(field);
+  return col && col.filterable !== false;
+}
+
 const _AlwaysVisibleFilterIconButton = (props) => {
   const { field, onClick } = props;
   const apiRef = useGridApiContext_();
   const rootProps = useGridRootProps_();
+
+  if (!_isColumnFilterable(apiRef, field, rootProps)) {
+    return null;
+  }
 
   // Detect whether this column has an active server-side filter.
   // activeFilterFields is a list of field names with accumulated
@@ -1056,8 +1068,13 @@ function _BellCurveRenderer(props) {
     });
   }
 
+  var chartHeight = Number(config && config.height);
+  if (!Number.isFinite(chartHeight) || chartHeight <= 0) chartHeight = 300;
+  var maxWidth = Number(config && config.maxWidth);
+  if (!Number.isFinite(maxWidth) || maxWidth <= 0) maxWidth = 860;
+
   var layout = {
-    width: 460, height: 220, margin: { l: 30, r: 20, t: 10, b: 35 },
+    autosize: true, height: chartHeight, margin: { l: 44, r: 28, t: 18, b: 48 },
     xaxis: {
       title: { text: "Percentile", font: { size: 11 } },
       tickvals: [-2.326, -1.645, -0.674, 0, 0.674, 1.645, 2.326],
@@ -1066,7 +1083,7 @@ function _BellCurveRenderer(props) {
     },
     yaxis: { visible: false, range: [0, 0.45] },
     shapes: shapes, annotations: annotations,
-    legend: { orientation: "h", y: -0.25, x: 0.5, xanchor: "center", font: { size: 10 } },
+    legend: { orientation: "h", y: -0.22, x: 0.5, xanchor: "center", font: { size: 11 } },
     plot_bgcolor: "rgba(0,0,0,0)",
     paper_bgcolor: "rgba(0,0,0,0)",
     hoverlabel: { font: { size: 11 } },
@@ -1076,11 +1093,19 @@ function _BellCurveRenderer(props) {
     style: { fontSize: 11, color: "rgba(0,0,0,0.55)", marginTop: 4, fontStyle: "italic" },
   }, data.summary) : null;
 
-  return React.createElement("div", { style: { padding: "4px 0" } },
+  return React.createElement("div", {
+    style: {
+      padding: "6px 0",
+      width: "100%",
+      maxWidth: maxWidth,
+      margin: "0",
+    },
+  },
     React.createElement(_PlotComponent, {
       data: traces, layout: layout,
       config: { staticPlot: false, displayModeBar: false, responsive: true },
-      style: { width: "100%", maxWidth: 480 },
+      useResizeHandler: true,
+      style: { width: "100%", height: chartHeight },
     }),
     summaryEl
   );
@@ -1099,6 +1124,25 @@ function _smartBadgeColor(text) {
   if (/pop:|population/i.test(t))                     return ["#00695c","#e0f2f1"];
   if (/ref:|reference/i.test(t))                      return ["#6a1b9a","#f3e5f5"];
   return ["#455a64","#eceff1"];
+}
+
+function _computeDetailPanelHeight(detailHeight, detailCols) {
+  const configured = Number(detailHeight);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  const count = Array.isArray(detailCols) ? detailCols.length : 0;
+  return Math.max(120, count * 32 + 24);
+}
+
+function _defaultRowHeightForParams(gridProps, params) {
+  const explicit = Number(gridProps && (gridProps.rowHeight || gridProps.row_height));
+  const base = Number.isFinite(explicit) && explicit > 0 ? explicit : 52;
+  if (params && typeof params.densityFactor === "number") {
+    return base * params.densityFactor;
+  }
+  const density = gridProps && gridProps.density;
+  if (density === "compact") return base * 0.7;
+  if (density === "comfortable") return base * 1.3;
+  return base;
 }
 
 function _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeFields, badgeColors, detailRenderers) {
@@ -1235,9 +1279,7 @@ function _DetailPanelsSlot(props) {
       rowById[id] = row;
     }
 
-    const calcHeight = (detailHeight && detailHeight > 0)
-      ? detailHeight
-      : Math.max(120, (detailCols || []).length * 32 + 24);
+    const calcHeight = _computeDetailPanelHeight(detailHeight, detailCols);
 
     const map = new Map();
     for (const rowId of expandedRowIds) {
@@ -1249,7 +1291,7 @@ function _DetailPanelsSlot(props) {
         key: "__detail_panel_" + String(rowId),
         style: {
           width: "100%",
-          minHeight: calcHeight,
+          height: calcHeight,
           overflow: "auto",
           padding: "14px 24px 14px 88px",
           boxSizing: "border-box",
@@ -1391,6 +1433,8 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
   const hasDetailPanel = Array.isArray(_detailCols) && _detailCols.length > 0;
 
   if (hasDetailPanel) {
+    const _getRowIdFn = effectiveProps.getRowId || ((r) => r.id);
+
     // Inject expander column after the checkbox column (if present).
     const _toggleDetailRow = (rowId) => {
       setExpandedRowIds((prev) => {
@@ -1413,7 +1457,7 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
       disableReorder: true,
       resizable: false,
       renderCell: (params) => {
-        const rowId = (effectiveProps.getRowId || ((r) => r.id))(params.row);
+        const rowId = _getRowIdFn(params.row);
         const isExp = expandedRowIds.has(rowId);
         return React.createElement("div", {
           role: "button",
@@ -1461,7 +1505,6 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     // Intercept cell clicks on the expander column.
     const origOnCellClick = effectiveProps.onCellClick;
     const origOnRowClick = effectiveProps.onRowClick;
-    const _getRowIdFn = effectiveProps.getRowId || ((r) => r.id);
     let _lastClickWasExpander = false;
 
     effectiveProps.onCellClick = (params, event) => {

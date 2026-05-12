@@ -879,7 +879,7 @@ wheels = [
 
 [[package]]
 name = "reflex-mui-datagrid"
-version = "0.2.6"
+version = "0.2.7"
 source = { editable = "." }
 dependencies = [
     { name = "polars" },
