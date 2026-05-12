@@ -5,6 +5,7 @@ resolution-markers = [
     "python_full_version >= '3.14'",
     "python_full_version < '3.14'",
 ]
+
 [manifest]
 members = [
     "datagrid-demo",
@@ -898,7 +899,7 @@ wheels = [
 
 [[package]]
 name = "reflex-mui-datagrid"
-version = "0.2.7"
+version = "0.2.8"
 source = { editable = "." }
 dependencies = [
     { name = "polars" },
