@@ -1337,7 +1337,7 @@ function _BellCurveRenderer(props) {
     style: { fontSize: 11, color: "rgba(0,0,0,0.55)", marginTop: 4, fontStyle: "italic" },
   }, data.summary) : null;
   var chart = React.createElement("div", {
-    style: { flex: "1 1 520px", minWidth: 380 },
+    style: { flex: "1 1 480px", minWidth: 340 },
   },
     React.createElement(_PlotComponent, {
       data: traces, layout: layout,
@@ -1350,18 +1350,75 @@ function _BellCurveRenderer(props) {
   var sidePanel = _buildPercentileSidePanel(data, config, items, outlierSet);
   var fullWidthSummary = _buildPercentileSummary(data, config);
 
+  // Optional match-rate bar chart panel — rendered to the right of the bell
+  // curve when the data includes a "match_rate_items" array (each item has
+  // label, value (e.g. "54.3%"), tone, and optional subtext).
+  var matchRateItems = Array.isArray(data.match_rate_items) ? data.match_rate_items : [];
+  var matchRatePanel = null;
+  if (matchRateItems.length > 0) {
+    var barRows = matchRateItems.map(function(item, i) {
+      var tc = _toneStyle(item.tone);
+      var pct = parseFloat(item.value) || 0;
+      var barWidth = Math.max(2, Math.min(100, pct));
+      return React.createElement("div", {
+        key: "mr_" + i,
+        style: { marginBottom: 6 },
+      },
+        React.createElement("div", {
+          style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 2 },
+        },
+          React.createElement("span", {
+            style: { fontSize: 10, color: "rgba(0,0,0,0.7)", fontWeight: 500, flex: "1 1 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 4 },
+          }, item.label || ""),
+          React.createElement("span", {
+            style: { fontSize: 11, fontWeight: 700, color: tc.fg, flexShrink: 0 },
+          }, item.value || "")
+        ),
+        React.createElement("div", {
+          style: { height: 6, borderRadius: 3, background: "rgba(0,0,0,0.08)", overflow: "hidden" },
+        },
+          React.createElement("div", {
+            style: { height: "100%", width: barWidth + "%", borderRadius: 3, background: tc.border || tc.fg, transition: "width 0.3s" },
+          })
+        ),
+        item.subtext ? React.createElement("div", {
+          style: { fontSize: 9, color: "rgba(0,0,0,0.45)", marginTop: 1, lineHeight: 1.2 },
+        }, item.subtext) : null
+      );
+    });
+    matchRatePanel = React.createElement("div", {
+      style: {
+        flex: "1 1 200px",
+        minWidth: 180,
+        maxWidth: 320,
+        display: "flex",
+        flexDirection: "column",
+        paddingTop: 6,
+        overflowY: "auto",
+        maxHeight: chartHeight + 40,
+      },
+    },
+      React.createElement("div", {
+        style: { fontSize: 11, fontWeight: 700, color: "rgba(0,0,0,0.62)", letterSpacing: "0.02em", marginBottom: 8 },
+      }, "Variant Match Rate"),
+      ...barRows
+    );
+  }
+
+  var rightSide = React.createElement("div", {
+    style: { display: "flex", flexDirection: "row", gap: 14, alignItems: "flex-start" },
+  }, ...[matchRatePanel, sidePanel].filter(Boolean));
+
   return React.createElement("div", {
     style: {
       padding: "6px 0",
       width: "100%",
-      maxWidth: maxWidth,
-      margin: "0",
-      display: "flex",
+      display: "grid",
+      gridTemplateColumns: matchRateItems.length > 0 ? "minmax(300px, 1fr) minmax(280px, 1fr)" : "1fr auto",
       gap: 18,
       alignItems: "flex-start",
-      flexWrap: "wrap",
     },
-  }, chart, sidePanel, fullWidthSummary);
+  }, chart, rightSide, fullWidthSummary);
 }
 
 function _smartBadgeColor(text) {
