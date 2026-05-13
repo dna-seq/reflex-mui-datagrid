@@ -886,7 +886,8 @@ function _buildPercentileSidePanel(data, config, items, outlierSet) {
     );
   });
 
-  var summary = data.summary ? React.createElement("div", {
+  var summaryPlacement = (config && config.summaryPlacement) || "sidePanel";
+  var summary = data.summary && summaryPlacement === "sidePanel" ? React.createElement("div", {
     style: {
       padding: "8px 10px",
       borderRadius: 6,
@@ -919,9 +920,30 @@ function _buildPercentileSidePanel(data, config, items, outlierSet) {
   );
 }
 
+function _buildPercentileSummary(data, config) {
+  var summaryPlacement = (config && config.summaryPlacement) || "sidePanel";
+  if (!data || !data.summary || summaryPlacement !== "fullWidth") return null;
+  return React.createElement("div", {
+    style: {
+      flex: "1 1 100%",
+      width: "100%",
+      padding: "8px 10px",
+      borderRadius: 6,
+      background: "#fafafa",
+      border: "1px solid rgba(0,0,0,0.10)",
+      fontSize: 11,
+      color: "rgba(0,0,0,0.62)",
+      lineHeight: 1.35,
+      fontStyle: "italic",
+      boxSizing: "border-box",
+    },
+  }, data.summary);
+}
+
 // ---- Rich detail renderer: percentile_spread ----
 function _renderPercentileSpread(data, config) {
   if (!data || typeof data !== "object") return null;
+  config = Object.assign({}, config || {}, data.rendererConfig || data.config || {});
   var scaleMin = (config && config.scaleMin != null) ? config.scaleMin : 0;
   var scaleMax = (config && config.scaleMax != null) ? config.scaleMax : 100;
   var range = scaleMax - scaleMin || 1;
@@ -1018,7 +1040,8 @@ function _renderPercentileSpread(data, config) {
     React.createElement("span", null, String(scaleMax))
   );
 
-  var summaryEl = data.summary ? React.createElement("div", {
+  var summaryPlacement = (config && config.summaryPlacement) || "sidePanel";
+  var summaryEl = data.summary && summaryPlacement === "chart" ? React.createElement("div", {
     style: { fontSize: 11, color: "rgba(0,0,0,0.55)", marginTop: 6, fontStyle: "italic" },
   }, data.summary) : null;
 
@@ -1026,6 +1049,7 @@ function _renderPercentileSpread(data, config) {
     style: { padding: "8px 0", flex: "1 1 420px", minWidth: 320, maxWidth: 560 },
   }, track, legendRow, scaleLabels, summaryEl);
   var sidePanel = _buildPercentileSidePanel(data, config, items, outlierSet);
+  var fullWidthSummary = _buildPercentileSummary(data, config);
 
   return React.createElement("div", {
     style: {
@@ -1037,7 +1061,7 @@ function _renderPercentileSpread(data, config) {
       alignItems: "flex-start",
       flexWrap: "wrap",
     },
-  }, chart, sidePanel);
+  }, chart, sidePanel, fullWidthSummary);
 }
 
 // ---- Rich detail renderer: bell_curve ----
@@ -1087,9 +1111,47 @@ function _resolvePlotComponent(mod) {
   return null;
 }
 
+function _numberConfig(config, key, fallback) {
+  var value = Number(config && config[key]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function _bellCurveLabelOffset(zVal, placedLabels, config) {
+  // Place each label in the first non-colliding slot of a 3-column grid
+  // (center / left / right) repeated upward across rows. Tier order is
+  // center-row0, left-row0, right-row0, center-row1, left-row1, right-row1, ...
+  // so two close-by labels separate horizontally before stacking vertically.
+  var minGap = _numberConfig(config, "labelMinGapZ", 0.24);
+  var maxTiers = Math.max(1, Math.floor(_numberConfig(config, "labelTiers", 9)));
+  var baseOffset = _numberConfig(config, "labelYOffset", 22);
+  var stepOffset = _numberConfig(config, "labelYOffsetStep", 18);
+  var xStep = _numberConfig(config, "labelXOffsetStep", 24);
+  var tier = 0;
+
+  for (var candidate = 0; candidate < maxTiers; candidate++) {
+    var collides = placedLabels.some(function(label) {
+      return label.tier === candidate && Math.abs(label.z - zVal) < minGap;
+    });
+    if (!collides) {
+      tier = candidate;
+      break;
+    }
+    tier = candidate;
+  }
+  placedLabels.push({ z: zVal, tier: tier });
+
+  var colOrder = [0, -1, 1];
+  var col = colOrder[tier % 3];
+  var row = Math.floor(tier / 3);
+  return {
+    ax: col * xStep,
+    ay: -(baseOffset + row * stepOffset),
+  };
+}
+
 function _BellCurveRenderer(props) {
   var data = props.data;
-  var config = props.config;
+  var config = Object.assign({}, props.config || {}, (data && (data.rendererConfig || data.config)) || {});
   var _ref = React.useState(0), tick = _ref[0], setTick = _ref[1];
 
   React.useEffect(function() {
@@ -1135,6 +1197,25 @@ function _BellCurveRenderer(props) {
 
   var shapes = [];
   var annotations = [];
+  var placedLabels = [];
+  var labelMode = (config && config.labelMode) || "auto";
+  var labelMaxVisible = _numberConfig(config, "labelMaxVisible", 16);
+  var showPointLabels = labelMode !== "none" && (labelMode === "always" || items.length <= labelMaxVisible);
+  var scoreVal = data.score != null ? data.score : data.median;
+  var zScore = null;
+  var scoreY = null;
+  if (scoreVal != null) {
+    var scoreFrac = (Number(scoreVal) - scaleMin) / ((scaleMax - scaleMin) || 1);
+    scoreFrac = Math.max(0.001, Math.min(0.999, scoreFrac));
+    zScore = _percentileToZ(scoreFrac);
+    scoreY = _normalPdf(zScore);
+    if (showPointLabels) {
+      var reservedScoreTiers = Math.max(0, Math.floor(_numberConfig(config, "scoreLabelReservedTiers", 3)));
+      for (var reservedTier = 0; reservedTier < reservedScoreTiers; reservedTier++) {
+        placedLabels.push({ z: zScore, tier: reservedTier });
+      }
+    }
+  }
 
   var bands = (config && Array.isArray(config.bands)) ? config.bands : [
     { from: 25, to: 75, label: "average range" },
@@ -1171,9 +1252,10 @@ function _BellCurveRenderer(props) {
     traces.push({
       x: [zVal], y: [yVal], type: "scatter", mode: "markers",
       marker: {
-        size: isOutlier ? 12 : 9, color: tc.fg,
+        size: Number(item.markerSize) || (isOutlier ? 12 : 9),
+        color: item.markerColor || tc.fg,
         line: { color: "#fff", width: 1.5 },
-        symbol: isOutlier ? "diamond" : "circle",
+        symbol: item.symbol || (isOutlier ? "diamond" : "circle"),
       },
       name: item.label,
       text: [(item.label || "") + ": " + val + "th pct"],
@@ -1181,30 +1263,39 @@ function _BellCurveRenderer(props) {
       showlegend: true,
     });
 
-    annotations.push({
-      x: zVal, y: yVal, xref: "x", yref: "y",
-      text: item.label || "", showarrow: true,
-      arrowhead: 0, arrowcolor: tc.fg,
-      ax: 0, ay: isOutlier ? -30 : -22,
-      font: { size: 10, color: tc.fg, weight: isOutlier ? 700 : 400 },
-    });
+    if (showPointLabels) {
+      var labelOffset = _bellCurveLabelOffset(zVal, placedLabels, config);
+      annotations.push({
+        x: zVal, y: yVal, xref: "x", yref: "y",
+        text: item.label || "", showarrow: true,
+        arrowhead: 0, arrowcolor: item.markerColor || tc.fg,
+        ax: labelOffset.ax, ay: labelOffset.ay,
+        font: { size: _numberConfig(config, "labelFontSize", 10), color: item.markerColor || tc.fg, weight: isOutlier ? 700 : 400 },
+      });
+    }
   }
 
-  var scoreVal = data.score != null ? data.score : data.median;
-  if (scoreVal != null) {
-    var medFrac = (Number(scoreVal) - scaleMin) / ((scaleMax - scaleMin) || 1);
-    medFrac = Math.max(0.001, Math.min(0.999, medFrac));
-    var zMed = _percentileToZ(medFrac);
+  if (scoreVal != null && zScore != null && scoreY != null) {
     shapes.push({
       type: "line", xref: "x", yref: "paper",
-      x0: zMed, x1: zMed, y0: 0, y1: 1,
+      x0: zScore, x1: zScore, y0: 0, y1: 1,
       line: { color: "#f57c00", width: 2 },
     });
     var scoreLabel = data.scoreLabel || "you (" + Math.round(Number(scoreVal)) + "th)";
+    var scoreLabelText = "<b>" + scoreLabel + "</b>";
     annotations.push({
-      x: zMed, y: _normalPdf(zMed), xref: "x", yref: "y",
-      text: scoreLabel, showarrow: false,
-      yshift: 14, font: { size: 9, color: "#f57c00" },
+      x: zScore, y: scoreY, xref: "x", yref: "y",
+      text: scoreLabelText, showarrow: true,
+      arrowhead: 0, arrowcolor: "#f57c00",
+      ax: _numberConfig(config, "scoreLabelXOffset", 0),
+      ay: -_numberConfig(config, "scoreLabelYOffset", 26),
+      font: {
+        size: _numberConfig(config, "scoreLabelFontSize", 13),
+        color: (config && config.scoreLabelColor) || "#e65100",
+      },
+      bgcolor: (config && config.scoreLabelBgColor) || "rgba(255,255,255,0.92)",
+      bordercolor: (config && config.scoreLabelBorderColor) || "rgba(245,124,0,0.55)",
+      borderpad: _numberConfig(config, "scoreLabelBorderPad", 3),
     });
   }
 
@@ -1212,24 +1303,37 @@ function _BellCurveRenderer(props) {
   if (!Number.isFinite(chartHeight) || chartHeight <= 0) chartHeight = 300;
   var maxWidth = Number(config && config.maxWidth);
   if (!Number.isFinite(maxWidth) || maxWidth <= 0) maxWidth = 860;
+  // Layout defaults intentionally match the historical bell curve so the
+  // curve shape and chart aspect stay stable; consumers can override
+  // individual values via the renderer config when more headroom is needed.
+  var marginTop = _numberConfig(config, "marginTop", 18);
+  var marginBottom = _numberConfig(config, "marginBottom", 48);
+  var legendY = _numberConfig(config, "legendY", -0.22);
+  var yAxisMax = _numberConfig(config, "yAxisMax", 0.45);
+  var xTitleStandoffRaw = Number(config && config.xTitleStandoff);
+  var xaxisTitle = { text: "Percentile", font: { size: 11 } };
+  if (Number.isFinite(xTitleStandoffRaw) && xTitleStandoffRaw > 0) {
+    xaxisTitle.standoff = xTitleStandoffRaw;
+  }
 
   var layout = {
-    autosize: true, height: chartHeight, margin: { l: 44, r: 28, t: 18, b: 48 },
+    autosize: true, height: chartHeight, margin: { l: 44, r: 28, t: marginTop, b: marginBottom },
     xaxis: {
-      title: { text: "Percentile", font: { size: 11 } },
+      title: xaxisTitle,
       tickvals: [-2.326, -1.645, -0.674, 0, 0.674, 1.645, 2.326],
       ticktext: ["1", "5", "25", "50", "75", "95", "99"],
       range: [-3.5, 3.5], zeroline: false,
     },
-    yaxis: { visible: false, range: [0, 0.45] },
+    yaxis: { visible: false, range: [0, yAxisMax] },
     shapes: shapes, annotations: annotations,
-    legend: { orientation: "h", y: -0.22, x: 0.5, xanchor: "center", font: { size: 11 } },
+    legend: { orientation: "h", y: legendY, x: 0.5, xanchor: "center", font: { size: 11 } },
     plot_bgcolor: "rgba(0,0,0,0)",
     paper_bgcolor: "rgba(0,0,0,0)",
     hoverlabel: { font: { size: 11 } },
   };
 
-  var summaryEl = data.summary ? React.createElement("div", {
+  var summaryPlacement = (config && config.summaryPlacement) || "sidePanel";
+  var summaryEl = data.summary && summaryPlacement === "chart" ? React.createElement("div", {
     style: { fontSize: 11, color: "rgba(0,0,0,0.55)", marginTop: 4, fontStyle: "italic" },
   }, data.summary) : null;
   var chart = React.createElement("div", {
@@ -1244,6 +1348,7 @@ function _BellCurveRenderer(props) {
     summaryEl
   );
   var sidePanel = _buildPercentileSidePanel(data, config, items, outlierSet);
+  var fullWidthSummary = _buildPercentileSummary(data, config);
 
   return React.createElement("div", {
     style: {
@@ -1256,7 +1361,7 @@ function _BellCurveRenderer(props) {
       alignItems: "flex-start",
       flexWrap: "wrap",
     },
-  }, chart, sidePanel);
+  }, chart, sidePanel, fullWidthSummary);
 }
 
 function _smartBadgeColor(text) {

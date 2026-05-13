@@ -218,7 +218,10 @@ def view(
     (app_pkg / f"{app_name}.py").write_text(app_code)
 
     rxconfig_code = f"""import reflex as rx
-config = rx.Config(app_name="{app_name}")
+config = rx.Config(
+    app_name="{app_name}",
+    plugins=[rx.plugins.RadixThemesPlugin()],
+)
 """
     (tmp_dir / "rxconfig.py").write_text(rxconfig_code)
 

@@ -105,6 +105,32 @@ class DetailRendererConfig(BaseModel):
     scale_min: float | None = None
     scale_max: float | None = None
     bands: list[PercentileBand] | None = None
+    summary_placement: Literal["sidePanel", "fullWidth", "chart", "none"] | None = None
+    height: int | None = None
+    max_width: int | None = None
+    side_panel_title: str | None = None
+    show_side_panel: bool | None = None
+    label_mode: Literal["auto", "always", "none"] | None = None
+    label_max_visible: int | None = None
+    label_min_gap_z: float | None = None
+    label_tiers: int | None = None
+    label_y_offset: int | None = None
+    label_y_offset_step: int | None = None
+    label_x_offset_step: int | None = None
+    label_font_size: int | None = None
+    score_label_font_size: int | None = None
+    score_label_y_offset: int | None = None
+    score_label_x_offset: int | None = None
+    score_label_reserved_tiers: int | None = None
+    score_label_color: str | None = None
+    score_label_bg_color: str | None = None
+    score_label_border_color: str | None = None
+    score_label_border_pad: int | None = None
+    margin_top: int | None = None
+    margin_bottom: int | None = None
+    legend_y: float | None = None
+    x_title_standoff: int | None = None
+    y_axis_max: float | None = None
     base_url: str | None = None
     suffix_url: str | None = None
     target: str | None = None
@@ -115,6 +141,56 @@ class DetailRendererConfig(BaseModel):
             d["scaleMin"] = d.pop("scale_min")
         if "scale_max" in d:
             d["scaleMax"] = d.pop("scale_max")
+        if "summary_placement" in d:
+            d["summaryPlacement"] = d.pop("summary_placement")
+        if "max_width" in d:
+            d["maxWidth"] = d.pop("max_width")
+        if "side_panel_title" in d:
+            d["sidePanelTitle"] = d.pop("side_panel_title")
+        if "show_side_panel" in d:
+            d["showSidePanel"] = d.pop("show_side_panel")
+        if "label_mode" in d:
+            d["labelMode"] = d.pop("label_mode")
+        if "label_max_visible" in d:
+            d["labelMaxVisible"] = d.pop("label_max_visible")
+        if "label_min_gap_z" in d:
+            d["labelMinGapZ"] = d.pop("label_min_gap_z")
+        if "label_tiers" in d:
+            d["labelTiers"] = d.pop("label_tiers")
+        if "label_y_offset" in d:
+            d["labelYOffset"] = d.pop("label_y_offset")
+        if "label_y_offset_step" in d:
+            d["labelYOffsetStep"] = d.pop("label_y_offset_step")
+        if "label_x_offset_step" in d:
+            d["labelXOffsetStep"] = d.pop("label_x_offset_step")
+        if "label_font_size" in d:
+            d["labelFontSize"] = d.pop("label_font_size")
+        if "score_label_font_size" in d:
+            d["scoreLabelFontSize"] = d.pop("score_label_font_size")
+        if "score_label_y_offset" in d:
+            d["scoreLabelYOffset"] = d.pop("score_label_y_offset")
+        if "score_label_x_offset" in d:
+            d["scoreLabelXOffset"] = d.pop("score_label_x_offset")
+        if "score_label_reserved_tiers" in d:
+            d["scoreLabelReservedTiers"] = d.pop("score_label_reserved_tiers")
+        if "score_label_color" in d:
+            d["scoreLabelColor"] = d.pop("score_label_color")
+        if "score_label_bg_color" in d:
+            d["scoreLabelBgColor"] = d.pop("score_label_bg_color")
+        if "score_label_border_color" in d:
+            d["scoreLabelBorderColor"] = d.pop("score_label_border_color")
+        if "score_label_border_pad" in d:
+            d["scoreLabelBorderPad"] = d.pop("score_label_border_pad")
+        if "margin_top" in d:
+            d["marginTop"] = d.pop("margin_top")
+        if "margin_bottom" in d:
+            d["marginBottom"] = d.pop("margin_bottom")
+        if "legend_y" in d:
+            d["legendY"] = d.pop("legend_y")
+        if "x_title_standoff" in d:
+            d["xTitleStandoff"] = d.pop("x_title_standoff")
+        if "y_axis_max" in d:
+            d["yAxisMax"] = d.pop("y_axis_max")
         if "base_url" in d:
             d["baseUrl"] = d.pop("base_url")
         if "suffix_url" in d:

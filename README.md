@@ -434,6 +434,8 @@ data_grid(
             "type": "bell_curve",
             "scaleMin": 0,
             "scaleMax": 100,
+            "labelTiers": 9,
+            "labelMinGapZ": 0.28,
             "bands": [{"from": 25, "to": 75, "label": "average range"}],
         },
     },
@@ -444,6 +446,8 @@ data_grid(
 The `DetailRendererConfig` and `PercentileBand` models provide validation and IDE autocomplete, but plain dicts work too.
 
 **Bell curve with Plotly:** The `bell_curve` renderer dynamically imports `react-plotly.js`, and the DataGrid wrapper installs the needed frontend Plotly packages automatically. If Plotly cannot load at runtime, it falls back to the div-based `percentile_spread`. `PlotlyDetailSupport` remains available as a no-op compatibility component for apps that already include it explicitly:
+
+Bell curve labels are collision-aware by default. Close-by points are first spread horizontally across a 3-column grid (center / left / right) before stacking into higher rows, so adjacent labels separate without changing the chart's margins or aspect ratio. The personal score label is placed last, rendered larger/bold, and reserves nearby label slots so population labels move away from it. Charts with many points also hide inline labels after `labelMaxVisible` while keeping legend and hover text. Label knobs: `labelMode` (`"auto"`, `"always"`, `"none"`), `labelTiers`, `labelMinGapZ`, `labelXOffsetStep`, `labelYOffset`, `labelYOffsetStep`, `scoreLabelFontSize`, `scoreLabelYOffset`, `scoreLabelReservedTiers`. Layout knobs (`marginTop`, `marginBottom`, `legendY`, `yAxisMax`, `xTitleStandoff`) default to the historical bell-curve layout and only need to be set when you want more headroom for very dense label stacks.
 
 ```python
 from reflex_mui_datagrid import PlotlyDetailSupport

@@ -115,26 +115,10 @@ def _build_prs_lazyframe() -> pl.LazyFrame:
     random.seed(42)
 
     prs_records = [
-        {"pgs_id": "PGS000028", "trait": "Breast cancer", "score": 3.607,
-         "pct": 0.0, "pop": "East Asian, European, Hispanic or Latin American",
-         "method": "theoretical", "auroc": 0.6, "quality": "Moderate",
-         "match": 62.0},
-        {"pgs_id": "PGS000056", "trait": "Parkinson's disease", "score": 1.625,
-         "pct": 0.0, "pop": "European",
-         "method": "theoretical", "auroc": None, "quality": "Moderate",
-         "match": 52.0},
         {"pgs_id": "PGS001781", "trait": "Type 2 diabetes (T2D)", "score": 0.035,
          "pct": 51.3, "pop": "European",
          "method": "theoretical", "auroc": 0.725, "quality": "High",
          "match": 63.0},
-        {"pgs_id": "PGS002760", "trait": "Epilepsy", "score": -1.141,
-         "pct": 0.0, "pop": "European",
-         "method": "theoretical", "auroc": None, "quality": "Moderate",
-         "match": 45.0},
-        {"pgs_id": "PGS003470", "trait": "HOMA-IR", "score": -0.053,
-         "pct": 0.0, "pop": "Hispanic or Latin American",
-         "method": "theoretical", "auroc": None, "quality": "Moderate",
-         "match": 38.0},
     ]
 
     more_traits = [
@@ -786,7 +770,8 @@ def prs_tab() -> rx.Component:
                         "type": "bell_curve",
                         "scaleMin": 0,
                         "scaleMax": 100,
-                        "height": 240,
+                        "height": 330,
+                        "maxWidth": 1120,
                         "sidePanelTitle": "PRS context",
                         "bands": [
                             {"from": 25, "to": 75, "label": "average range"},
@@ -796,8 +781,8 @@ def prs_tab() -> rx.Component:
                     },
                     "trait_warnings": {"type": "badge_list"},
                 },
-                detail_height=520,
-                height="600px",
+                detail_height=640,
+                height="720px",
             ),
             rx.text("Loading data...", color="var(--gray-9)", font_style="italic"),
         ),
@@ -808,7 +793,7 @@ def prs_tab() -> rx.Component:
             border_radius="8px",
             background="var(--gray-3)",
         ),
-        height="800px",
+        height="920px",
         display="flex",
         flex_direction="column",
         gap="1em",

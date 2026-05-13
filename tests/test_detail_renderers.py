@@ -282,6 +282,77 @@ class TestBellCurveSupport:
         assert "sidePanelTitle" in _INLINE_WRAPPER_JS
         assert 'flex: "0 0 220px"' in _INLINE_WRAPPER_JS
 
+    def test_percentile_summary_can_span_full_width(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert "_buildPercentileSummary" in _INLINE_WRAPPER_JS
+        assert "summaryPlacement" in _INLINE_WRAPPER_JS
+        assert 'summaryPlacement === "sidePanel"' in _INLINE_WRAPPER_JS
+        assert 'summaryPlacement === "chart"' in _INLINE_WRAPPER_JS
+        assert 'flex: "1 1 100%"' in _INLINE_WRAPPER_JS
+
+    def test_bell_curve_allows_row_level_renderer_config(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert "data.rendererConfig" in _INLINE_WRAPPER_JS
+        assert "config.showSidePanel === false" in _INLINE_WRAPPER_JS
+
+    def test_bell_curve_staggers_dense_labels(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert "_bellCurveLabelOffset" in _INLINE_WRAPPER_JS
+        assert "labelMinGapZ" in _INLINE_WRAPPER_JS
+        assert "labelTiers" in _INLINE_WRAPPER_JS
+        assert "labelMaxVisible" in _INLINE_WRAPPER_JS
+        assert "labelXOffsetStep" in _INLINE_WRAPPER_JS
+        assert "colOrder" in _INLINE_WRAPPER_JS
+        assert "scoreLabelReservedTiers" in _INLINE_WRAPPER_JS
+        assert "placedLabels.push({ z: zScore, tier: reservedTier })" in _INLINE_WRAPPER_JS
+
+    def test_bell_curve_prioritizes_personal_score_label(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert 'text: scoreLabelText, showarrow: true' in _INLINE_WRAPPER_JS
+        assert '<b>" + scoreLabel + "</b>' in _INLINE_WRAPPER_JS
+        assert '_numberConfig(config, "scoreLabelFontSize", 13)' in _INLINE_WRAPPER_JS
+        assert '_numberConfig(config, "scoreLabelYOffset", 26)' in _INLINE_WRAPPER_JS
+        assert '_numberConfig(config, "scoreLabelReservedTiers", 3)' in _INLINE_WRAPPER_JS
+        assert 'scoreLabelBgColor' in _INLINE_WRAPPER_JS
+
+    def test_bell_curve_layout_defaults_preserve_original_curve(self) -> None:
+        """Default chart layout must match the historical bell curve."""
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert '_numberConfig(config, "marginTop", 18)' in _INLINE_WRAPPER_JS
+        assert '_numberConfig(config, "marginBottom", 48)' in _INLINE_WRAPPER_JS
+        assert '_numberConfig(config, "legendY", -0.22)' in _INLINE_WRAPPER_JS
+        assert '_numberConfig(config, "yAxisMax", 0.45)' in _INLINE_WRAPPER_JS
+
+    def test_bell_curve_exposes_layout_spacing_knobs(self) -> None:
+        from reflex_mui_datagrid.models import DetailRendererConfig
+
+        config = DetailRendererConfig(
+            type="bell_curve",
+            label_mode="always",
+            label_tiers=6,
+            label_x_offset_step=30,
+            score_label_font_size=15,
+            score_label_y_offset=52,
+            score_label_reserved_tiers=8,
+            margin_bottom=84,
+            legend_y=-0.4,
+            x_title_standoff=18,
+        ).model_dump()
+        assert config["labelMode"] == "always"
+        assert config["labelTiers"] == 6
+        assert config["labelXOffsetStep"] == 30
+        assert config["scoreLabelFontSize"] == 15
+        assert config["scoreLabelYOffset"] == 52
+        assert config["scoreLabelReservedTiers"] == 8
+        assert config["marginBottom"] == 84
+        assert config["legendY"] == -0.4
+        assert config["xTitleStandoff"] == 18
+
 
 class TestFilterableColumnControls:
     """Filtering opt-outs should be honored by frontend and lazy-grid helpers."""
