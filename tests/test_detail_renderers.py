@@ -169,11 +169,13 @@ class TestDetailRenderersConfig:
 
         renderers: dict[str, Any] = {
             "risk_details": {"type": "key_value_list"},
-            "risk_methods": {"type": "metric_list"},
+            "risk_methods": {"type": "metric_list", "compact": True, "maxColumns": 4},
             "pgs_links": {
                 "type": "link_list",
                 "baseUrl": "https://www.pgscatalog.org/score/",
                 "suffixUrl": "/",
+                "underline": True,
+                "separator": ", ",
             },
             "population_percentiles": {
                 "type": "percentile_spread",
@@ -191,6 +193,8 @@ class TestDetailRenderersConfig:
         deserialized = json.loads(serialized)
         assert set(deserialized.keys()) == set(renderers.keys())
         assert deserialized["population_percentiles"]["bands"][0]["from"] == 25
+        assert deserialized["risk_methods"]["maxColumns"] == 4
+        assert deserialized["pgs_links"]["underline"] is True
 
     def test_detail_renderers_coexists_with_badge_fields(self) -> None:
         renderers = {"risk_details": {"type": "key_value_list"}}
@@ -261,12 +265,76 @@ class TestBellCurveSupport:
         ]:
             assert name in _INLINE_WRAPPER_JS, f"Missing function: {name}"
 
+    def test_metric_list_exposes_compact_card_layout_knobs(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+        from reflex_mui_datagrid.models import DetailRendererConfig
+
+        assert "config.maxColumns" in _INLINE_WRAPPER_JS
+        assert "config.minCardWidth" in _INLINE_WRAPPER_JS
+        assert "config.cardPadding" in _INLINE_WRAPPER_JS
+        assert "_renderMetricList(parsed, rendererCfg)" in _INLINE_WRAPPER_JS
+
+        config = DetailRendererConfig(
+            type="metric_list",
+            compact=True,
+            max_columns=4,
+            min_card_width=150,
+            max_card_width=260,
+            card_padding="7px 10px",
+            gap=8,
+        ).model_dump()
+        assert config["compact"] is True
+        assert config["maxColumns"] == 4
+        assert config["minCardWidth"] == 150
+        assert config["maxCardWidth"] == 260
+        assert config["cardPadding"] == "7px 10px"
+        assert config["gap"] == 8
+
+    def test_link_list_keeps_separators_with_wrapped_links(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+        from reflex_mui_datagrid.models import DetailRendererConfig
+
+        assert "const separator" in _INLINE_WRAPPER_JS
+        assert 'key: "group_" + i' in _INLINE_WRAPPER_JS
+        assert 'whiteSpace: "nowrap"' in _INLINE_WRAPPER_JS
+        assert "textDecoration: textDecoration" in _INLINE_WRAPPER_JS
+
+        config = DetailRendererConfig(
+            type="link_list",
+            base_url="https://www.pgscatalog.org/score/",
+            suffix_url="/",
+            underline=True,
+            separator=", ",
+            text_decoration="underline",
+        ).model_dump()
+        assert config["baseUrl"] == "https://www.pgscatalog.org/score/"
+        assert config["suffixUrl"] == "/"
+        assert config["underline"] is True
+        assert config["separator"] == ", "
+        assert config["textDecoration"] == "underline"
+
     def test_detail_panels_do_not_expand_host_row_height(self) -> None:
         from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
 
         assert "effectiveProps.getRowHeight = (params) =>" not in _INLINE_WRAPPER_JS
         assert "return baseHeight + _detailPanelHeight" not in _INLINE_WRAPPER_JS
         assert "height: calcHeight" in _INLINE_WRAPPER_JS
+
+    def test_pagination_false_forwards_scroll_mode_to_mui(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert "ep.pagination = false;" in _INLINE_WRAPPER_JS
+        assert "ep.autoPageSize = false;" in _INLINE_WRAPPER_JS
+        assert "falling back to paginated mode" not in _INLINE_WRAPPER_JS
+        assert "ep.hideFooter = false;" not in _INLINE_WRAPPER_JS
+
+    def test_detail_height_auto_expands_to_fit_content(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert 'detailHeight === "auto"' in _INLINE_WRAPPER_JS
+        assert "isAutoHeight" in _INLINE_WRAPPER_JS
+        assert 'overflow: "visible"' in _INLINE_WRAPPER_JS
+        assert 'height: "auto"' in _INLINE_WRAPPER_JS
 
     def test_bell_curve_detail_renderer_is_not_centered_in_full_row_width(self) -> None:
         from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
@@ -313,11 +381,15 @@ class TestBellCurveSupport:
         from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
 
         assert 'text: scoreLabelText, showarrow: true' in _INLINE_WRAPPER_JS
-        assert '<b>" + scoreLabel + "</b>' in _INLINE_WRAPPER_JS
+        assert "_wrapAnnotationText" in _INLINE_WRAPPER_JS
+        assert "scoreLabelWrapChars" in _INLINE_WRAPPER_JS
+        assert "scoreLabelMaxLines" in _INLINE_WRAPPER_JS
         assert '_numberConfig(config, "scoreLabelFontSize", 13)' in _INLINE_WRAPPER_JS
         assert '_numberConfig(config, "scoreLabelYOffset", 26)' in _INLINE_WRAPPER_JS
         assert '_numberConfig(config, "scoreLabelReservedTiers", 3)' in _INLINE_WRAPPER_JS
         assert 'scoreLabelBgColor' in _INLINE_WRAPPER_JS
+        assert 'bgcolor: (config && config.scoreLabelBgColor) || "rgba(255,255,255,0.68)"' in _INLINE_WRAPPER_JS
+        assert 'bordercolor: (config && config.scoreLabelBorderColor) || "rgba(245,124,0,0.35)"' in _INLINE_WRAPPER_JS
 
     def test_bell_curve_layout_defaults_preserve_original_curve(self) -> None:
         """Default chart layout must match the historical bell curve."""
@@ -356,6 +428,16 @@ class TestBellCurveSupport:
 
 class TestFilterableColumnControls:
     """Filtering opt-outs should be honored by frontend and lazy-grid helpers."""
+
+    def test_server_filter_panel_keeps_apply_button_visible(self) -> None:
+        from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
+
+        assert "_FilterPanelWithApply" in _INLINE_WRAPPER_JS
+        assert "client and server modes" in _INLINE_WRAPPER_JS
+        assert 'position: "sticky"' in _INLINE_WRAPPER_JS
+        assert "bottom: 0" in _INLINE_WRAPPER_JS
+        assert "MuiDataGrid-panelWrapper" in _INLINE_WRAPPER_JS
+        assert "zIndex: 1300" in _INLINE_WRAPPER_JS
 
     def test_custom_filter_icon_respects_filterable_false(self) -> None:
         from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS

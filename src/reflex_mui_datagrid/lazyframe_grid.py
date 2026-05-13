@@ -1042,7 +1042,7 @@ def lazyframe_grid(
     debug_log: bool = True,
     on_row_click: Any = None,
     detail_columns: list[str] | None = None,
-    detail_height: int | None = None,
+    detail_height: int | str | None = None,
     detail_labels: dict[str, str] | None = None,
     detail_badge_fields: list[str] | None = None,
     detail_badge_colors: dict[str, list[str]] | None = None,
@@ -1090,6 +1090,9 @@ def lazyframe_grid(
             disables the feature.
         detail_height: Fixed pixel height for the detail row.  When
             ``None``, auto-computed from the number of detail columns.
+            Pass the string ``"auto"`` to remove the fixed height
+            entirely so the panel grows to fit its content (no internal
+            scrollbar).
         detail_labels: Optional ``{field: label}`` mapping for display
             labels in the detail panel.  Falls back to the column's
             ``headerName`` or the raw field name.

@@ -131,9 +131,18 @@ class DetailRendererConfig(BaseModel):
     legend_y: float | None = None
     x_title_standoff: int | None = None
     y_axis_max: float | None = None
+    compact: bool | None = None
+    max_columns: int | None = None
+    min_card_width: int | None = None
+    max_card_width: int | None = None
+    card_padding: str | None = None
+    gap: int | None = None
     base_url: str | None = None
     suffix_url: str | None = None
     target: str | None = None
+    separator: str | None = None
+    underline: bool | None = None
+    text_decoration: str | None = None
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:
         d = super().model_dump(exclude_none=True, **kwargs)
@@ -191,10 +200,20 @@ class DetailRendererConfig(BaseModel):
             d["xTitleStandoff"] = d.pop("x_title_standoff")
         if "y_axis_max" in d:
             d["yAxisMax"] = d.pop("y_axis_max")
+        if "max_columns" in d:
+            d["maxColumns"] = d.pop("max_columns")
+        if "min_card_width" in d:
+            d["minCardWidth"] = d.pop("min_card_width")
+        if "max_card_width" in d:
+            d["maxCardWidth"] = d.pop("max_card_width")
+        if "card_padding" in d:
+            d["cardPadding"] = d.pop("card_padding")
         if "base_url" in d:
             d["baseUrl"] = d.pop("base_url")
         if "suffix_url" in d:
             d["suffixUrl"] = d.pop("suffix_url")
+        if "text_decoration" in d:
+            d["textDecoration"] = d.pop("text_decoration")
         if "bands" in d:
             d["bands"] = [b.model_dump() for b in (self.bands or [])]
         return d

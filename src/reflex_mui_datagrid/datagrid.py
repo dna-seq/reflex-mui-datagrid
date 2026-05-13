@@ -99,42 +99,24 @@ def _on_request_value_options_spec(field: rx.Var) -> list[rx.Var]:
 # This defines the UnlimitedDataGrid component using MuiDataGrid_ (which is
 # imported via add_imports as an alias for the real MUI DataGrid).
 #
-# ESM-compatible monkey-patching (Vite / Rolldown):
+# ESM-compatible compatibility patch (Vite / Rolldown):
 #
-# The MUI DataGrid Community edition enforces two restrictions:
-#   1. ``pagination`` is forced to ``true`` via ``DATA_GRID_FORCED_PROPS``.
-#   2. ``pageSize > 100`` triggers ``throwIfPageSizeExceedsTheLimit``.
-#
-# Both checks compare against ``GridSignature.DataGrid``, a property on
-# a plain JS object.  Crucially, ``GridSignature`` is exported from the
-# *same* npm entry point (``@mui/x-data-grid``) as ``DataGrid``, so
-# after Vite pre-bundles them into a single file they share the exact
-# same object reference.  Mutating ``GridSignature.DataGrid`` at module
-# load time makes *all* internal comparisons
-# ``signatureProp === GridSignature.DataGrid`` fail, because the forced
-# prop still uses the original string literal ``'DataGrid'``.
-#
-# For ``pagination=false`` (continuous scrolling with a vertical scrollbar):
-# MUI still forces ``pagination=true`` internally, so the wrapper sets
-# ``pageSize`` to the total row count and hides the footer, putting all
-# rows on a single "page".  MUI's built-in row virtualisation then
-# renders only the visible DOM rows, and the virtual scroller shows a
-# vertical scrollbar.
-#
-# A lightweight React Error Boundary (``_DataGridGuard``) provides a
-# graceful fallback: if the patch did not propagate for any reason, the
-# guard catches the ``pageSize > 100`` error and re-renders the grid in
-# safe paginated (``autoPageSize``) mode instead of crashing the page.
+# Older MUI X Community builds enforced pagination and a 100-row page-size
+# cap.  The wrapper still applies the historical GridSignature patch when
+# available, but dynamic scrolling no longer depends on a paginated
+# one-page workaround.  ``pagination=false`` is always forwarded directly
+# to MUI so virtualization handles the loaded rows and LazyFrameGrid can
+# append server-side chunks.
 # ---------------------------------------------------------------------------
 _INLINE_WRAPPER_JS = """
 // ---------------------------------------------------------------------------
-// 1. Patch: Bypass MUI DataGrid Community 100-row page-size limit.
+// 1. Compatibility patch for older MUI DataGrid Community builds.
 //
 // GridSignature_ is imported from the *same* @mui/x-data-grid entry
 // point as MuiDataGrid_, so Vite pre-bundles them into one file and
 // they share the same object reference.  Mutating the .DataGrid
 // property makes all internal `signatureProp === GridSignature.DataGrid`
-// comparisons evaluate to false, removing the cap.
+// comparisons evaluate to false, removing the old pagination/page-size cap.
 // ---------------------------------------------------------------------------
 let _muiPatchActive = false;
 try {
@@ -143,47 +125,12 @@ try {
     GridSignature_.DataGrid = 'DataGrid_Unlimited';
     _muiPatchActive = true;
   }
-} catch (_e) { /* import unavailable — handled by Error Boundary */ }
+} catch (_e) { /* import unavailable — current MUI handles pagination=false directly */ }
 
 const _muiDefaultTheme = createTheme_();
 
 // ---------------------------------------------------------------------------
-// 2. Error Boundary: graceful degradation when the patch does not take
-//    effect (e.g. future MUI version removes GridSignature export).
-//    Catches the "pageSize > 100" error and re-renders in safe mode.
-// ---------------------------------------------------------------------------
-class _DataGridGuard extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { pageSizeError: false, otherError: null };
-  }
-  static getDerivedStateFromError(error) {
-    if (error && typeof error.message === 'string' &&
-        error.message.indexOf('pageSize') !== -1 &&
-        error.message.indexOf('100') !== -1) {
-      return { pageSizeError: true, otherError: null };
-    }
-    return { pageSizeError: false, otherError: error };
-  }
-  componentDidCatch(error) {
-    if (this.state.pageSizeError) {
-      console.warn(
-        '[reflex-mui-datagrid] GridSignature patch did not propagate. ' +
-        'Falling back to paginated mode (autoPageSize).'
-      );
-    }
-  }
-  render() {
-    if (this.state.otherError) throw this.state.otherError;
-    if (this.state.pageSizeError && typeof this.props.fallback === 'function') {
-      return this.props.fallback();
-    }
-    return this.props.children;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 3. Column-description header enhancer
+// 2. Column-description header enhancer
 //
 // When a column has a `description`, renderHeader produces a two-line header
 // (bold name + smaller description).  The ref callback walks up to the
@@ -291,7 +238,16 @@ const _FilterPanelWithApply = React.forwardRef((props, ref) => {
     "div",
     {
       onKeyDown: handleKeyDown,
-      style: { display: "flex", flexDirection: "column" },
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        background: "#fff",
+        minWidth: 360,
+        maxWidth: "min(92vw, 720px)",
+        overflow: "visible",
+        position: "relative",
+        zIndex: 1301,
+      },
     },
     React.createElement(GridFilterPanel_, { ...props, ref: ref }),
     React.createElement(
@@ -303,6 +259,11 @@ const _FilterPanelWithApply = React.forwardRef((props, ref) => {
           gap: "8px",
           padding: "8px 16px 12px",
           borderTop: "1px solid rgba(0,0,0,0.12)",
+          background: "#fff",
+          position: "sticky",
+          bottom: 0,
+          zIndex: 2,
+          boxShadow: "0 -2px 6px rgba(0,0,0,0.06)",
         },
       },
       React.createElement(
@@ -638,17 +599,37 @@ function _buildGridProps(props, unlimitedMode) {
     }
   }
 
+  // Use the same footer-style filter panel in client and server modes so
+  // header filter buttons always expose visible Apply/Reset controls.  In
+  // client mode MUI still applies changes live; Apply simply closes the panel.
+  const existingFilterPanelSlots = ep.slots || {};
+  if (!existingFilterPanelSlots.filterPanel) {
+    ep.slots = {
+      ...existingFilterPanelSlots,
+      filterPanel: _FilterPanelWithApply,
+    };
+  }
+
+  const existingFilterPanelSlotProps = ep.slotProps || {};
+  const existingPanelSlotProps = existingFilterPanelSlotProps.panel || {};
+  ep.slotProps = {
+    ...existingFilterPanelSlotProps,
+    panel: {
+      ...existingPanelSlotProps,
+      sx: {
+        ...(existingPanelSlotProps.sx || {}),
+        zIndex: 1300,
+        overflow: "visible",
+        "& .MuiDataGrid-panelWrapper": {
+          overflow: "visible",
+        },
+      },
+    },
+  };
+
   // When server-side filtering is active, use the custom filter panel
   // with Apply/Reset buttons so every keystroke doesn't trigger a query.
   if (ep.filterMode === "server") {
-    const existingSlots = ep.slots || {};
-    if (!existingSlots.filterPanel) {
-      ep.slots = {
-        ...existingSlots,
-        filterPanel: _FilterPanelWithApply,
-      };
-    }
-
     // MUI's default toolbar quick filter is client-oriented. In server mode
     // our Python backend only applies explicit column filters via Apply, so
     // hide quick search by default to avoid showing a non-functional control.
@@ -675,20 +656,11 @@ function _buildGridProps(props, unlimitedMode) {
   }
 
   if (pagination === false) {
-    if (unlimitedMode) {
-      // Patch active: put all rows on one "page" for continuous scrolling.
-      // Use ep.rows (which may include injected detail rows) if available.
-      const totalRows = ep.rows ? ep.rows.length : (rest.rows ? rest.rows.length : (rest.rowCount || 0));
-      if (totalRows > 0) {
-        ep.paginationModel = { page: 0, pageSize: totalRows };
-        ep.pageSizeOptions = [totalRows];
-      }
-      if (ep.hideFooter === undefined) ep.hideFooter = true;
-    } else {
-      // Fallback: use autoPageSize (respects the 100-row cap).
-      ep.autoPageSize = true;
-      if (ep.hideFooter === undefined) ep.hideFooter = false;
-    }
+    // Real continuous-scroll mode: MUI virtualizes the loaded rows without
+    // page controls, while LazyFrameGrid appends new server-side chunks.
+    ep.pagination = false;
+    ep.autoPageSize = false;
+    if (ep.hideFooter === undefined) ep.hideFooter = true;
   } else if (pagination !== undefined) {
     ep.pagination = pagination;
   }
@@ -744,35 +716,44 @@ function _renderLinkList(data, config) {
   const baseUrl = (config && config.baseUrl) || "";
   const suffixUrl = (config && config.suffixUrl) || "";
   const target = (config && config.target) || "_blank";
+  const separator = (config && config.separator != null) ? String(config.separator) : ", ";
+  const textDecoration = (config && (config.underline === true || config.textDecoration === "underline"))
+    ? "underline"
+    : ((config && config.textDecoration) || "none");
   data.forEach(function(item, i) {
     if (!item) return;
     const label = item.label != null ? String(item.label) : String(item.value || "");
     if (!label) return;
     const href = item.url || (baseUrl ? (baseUrl + label + suffixUrl) : "");
-    if (i > 0) {
-      links.push(React.createElement("span", {
+    const children = [];
+    if (links.length > 0 && separator) {
+      children.push(React.createElement("span", {
         key: "sep_" + i,
         style: { color: "rgba(0,0,0,0.45)" },
-      }, ", "));
+      }, separator));
     }
     if (href) {
-      links.push(React.createElement("a", {
+      children.push(React.createElement("a", {
         key: "link_" + i,
         href: href,
         target: target,
         rel: "noopener noreferrer",
         style: {
           color: item.color || "#1565c0",
-          textDecoration: "none",
+          textDecoration: textDecoration,
           fontWeight: 600,
         },
       }, label));
     } else {
-      links.push(React.createElement("span", {
+      children.push(React.createElement("span", {
         key: "label_" + i,
         style: { fontWeight: 600 },
       }, label));
     }
+    links.push(React.createElement("span", {
+      key: "group_" + i,
+      style: { display: "inline-flex", whiteSpace: "nowrap", alignItems: "baseline" },
+    }, ...children));
   });
   return React.createElement("div", {
     style: {
@@ -809,23 +790,45 @@ function _renderKeyValueList(data) {
 }
 
 // ---- Rich detail renderer: metric_list ----
-function _renderMetricList(data) {
+function _renderMetricList(data, config) {
   if (!Array.isArray(data)) return null;
+  config = config || {};
+  const gap = Number(config.gap);
+  const cardGap = Number.isFinite(gap) && gap >= 0 ? gap : 10;
+  const maxColumns = Number(config.maxColumns);
+  const compact = config.compact === true;
+  const minCardWidth = Number(config.minCardWidth);
+  const cardMinWidth = Number.isFinite(minCardWidth) && minCardWidth > 0
+    ? minCardWidth
+    : (compact ? 120 : 140);
+  const maxCardWidth = Number(config.maxCardWidth);
+  const baseCardStyle = {};
+  if (Number.isFinite(maxColumns) && maxColumns > 0) {
+    const basis = "calc((100% - " + (cardGap * (maxColumns - 1)) + "px) / " + maxColumns + ")";
+    baseCardStyle.flex = "1 1 " + basis;
+    baseCardStyle.maxWidth = basis;
+  } else {
+    baseCardStyle.flex = "1 1 " + cardMinWidth + "px";
+    baseCardStyle.maxWidth = Number.isFinite(maxCardWidth) && maxCardWidth > 0 ? maxCardWidth : 260;
+  }
   var cards = data.map(function(item, i) {
     var tc = _toneStyle(item.tone);
+    const hasLongText = String(item.subtext || "").length > 72 || String(item.value || "").length > 24;
+    const padding = config.cardPadding || (compact && !hasLongText ? "7px 10px" : "10px 16px");
     return React.createElement("div", {
       key: i,
       style: {
-        display: "flex", flexDirection: "column", padding: "10px 16px",
+        display: "flex", flexDirection: "column", padding: padding,
         borderRadius: 6, background: tc.bg, border: "1px solid " + tc.border,
-        minWidth: 140, flex: "1 1 140px", maxWidth: 260,
+        minWidth: cardMinWidth,
+        ...baseCardStyle,
       },
     },
       React.createElement("div", {
         style: { fontSize: 11, color: "rgba(0,0,0,0.55)", marginBottom: 2, fontWeight: 500 },
       }, item.label || ""),
       React.createElement("div", {
-        style: { fontSize: 18, fontWeight: 700, color: tc.fg, lineHeight: 1.3 },
+        style: { fontSize: compact ? 16 : 18, fontWeight: 700, color: tc.fg, lineHeight: 1.3 },
       }, item.value != null ? String(item.value) : ""),
       item.subtext ? React.createElement("div", {
         style: { fontSize: 11, color: "rgba(0,0,0,0.45)", marginTop: 3, lineHeight: 1.3 },
@@ -833,7 +836,7 @@ function _renderMetricList(data) {
     );
   });
   return React.createElement("div", {
-    style: { display: "flex", flexWrap: "wrap", gap: 10, padding: "4px 0" },
+    style: { display: "flex", flexWrap: "wrap", gap: cardGap, padding: "4px 0" },
   }, ...cards);
 }
 
@@ -1116,6 +1119,35 @@ function _numberConfig(config, key, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function _escapeHtml(text) {
+  return String(text == null ? "" : text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function _wrapAnnotationText(text, maxChars, maxLines) {
+  var words = String(text == null ? "" : text).trim().split(/[ \t]+/).filter(Boolean);
+  if (words.length === 0) return "";
+  var lines = [];
+  var line = "";
+  for (var i = 0; i < words.length; i++) {
+    var word = words[i];
+    var next = line ? line + " " + word : word;
+    if (line && next.length > maxChars) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+    if (lines.length >= maxLines) break;
+  }
+  if (line && lines.length < maxLines) lines.push(line);
+  return lines.map(_escapeHtml).join("<br>");
+}
+
 function _bellCurveLabelOffset(zVal, placedLabels, config) {
   // Place each label in the first non-colliding slot of a 3-column grid
   // (center / left / right) repeated upward across rows. Tier order is
@@ -1282,7 +1314,12 @@ function _BellCurveRenderer(props) {
       line: { color: "#f57c00", width: 2 },
     });
     var scoreLabel = data.scoreLabel || "you (" + Math.round(Number(scoreVal)) + "th)";
-    var scoreLabelText = "<b>" + scoreLabel + "</b>";
+    var wrappedScoreLabel = _wrapAnnotationText(
+      scoreLabel,
+      Math.max(8, Math.floor(_numberConfig(config, "scoreLabelWrapChars", 18))),
+      Math.max(1, Math.floor(_numberConfig(config, "scoreLabelMaxLines", 3)))
+    );
+    var scoreLabelText = "<b>" + wrappedScoreLabel + "</b>";
     annotations.push({
       x: zScore, y: scoreY, xref: "x", yref: "y",
       text: scoreLabelText, showarrow: true,
@@ -1293,9 +1330,9 @@ function _BellCurveRenderer(props) {
         size: _numberConfig(config, "scoreLabelFontSize", 13),
         color: (config && config.scoreLabelColor) || "#e65100",
       },
-      bgcolor: (config && config.scoreLabelBgColor) || "rgba(255,255,255,0.92)",
-      bordercolor: (config && config.scoreLabelBorderColor) || "rgba(245,124,0,0.55)",
-      borderpad: _numberConfig(config, "scoreLabelBorderPad", 3),
+      bgcolor: (config && config.scoreLabelBgColor) || "rgba(255,255,255,0.68)",
+      bordercolor: (config && config.scoreLabelBorderColor) || "rgba(245,124,0,0.35)",
+      borderpad: _numberConfig(config, "scoreLabelBorderPad", 2),
     });
   }
 
@@ -1437,6 +1474,7 @@ function _smartBadgeColor(text) {
 }
 
 function _computeDetailPanelHeight(detailHeight, detailCols) {
+  if (detailHeight === "auto") return null;
   const configured = Number(detailHeight);
   if (Number.isFinite(configured) && configured > 0) return configured;
   const count = Array.isArray(detailCols) ? detailCols.length : 0;
@@ -1484,7 +1522,7 @@ function _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeF
       } else if (rtype === "key_value_list" && Array.isArray(parsed)) {
         richEl = _renderKeyValueList(parsed);
       } else if (rtype === "metric_list" && Array.isArray(parsed)) {
-        richEl = _renderMetricList(parsed);
+        richEl = _renderMetricList(parsed, rendererCfg);
       } else if (rtype === "percentile_spread" && parsed && typeof parsed === "object") {
         richEl = _renderPercentileSpread(parsed, rendererCfg);
       } else if (rtype === "bell_curve" && parsed && typeof parsed === "object") {
@@ -1592,6 +1630,7 @@ function _DetailPanelsSlot(props) {
     }
 
     const calcHeight = _computeDetailPanelHeight(detailHeight, detailCols);
+    const isAutoHeight = calcHeight == null;
 
     const map = new Map();
     for (const rowId of expandedRowIds) {
@@ -1599,12 +1638,14 @@ function _DetailPanelsSlot(props) {
       if (!row) continue;
 
       const content = _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeFields, badgeColors, detailRenderers);
+      const heightStyle = isAutoHeight
+        ? { minHeight: 120, height: "auto", overflow: "visible" }
+        : { height: calcHeight, overflow: "auto" };
       const panel = React.createElement("div", {
         key: "__detail_panel_" + String(rowId),
         style: {
           width: "100%",
-          height: calcHeight,
-          overflow: "auto",
+          ...heightStyle,
           padding: "14px 24px 14px 88px",
           boxSizing: "border-box",
           background: "var(--DataGrid-containerBackground, #fafafa)",
@@ -1900,23 +1941,6 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
 
   const grid = React.createElement(MuiDataGrid_, { ...effectiveProps, ref });
 
-  if (props.pagination === false && _muiPatchActive) {
-    const fallback = () => {
-      _dgLog(log, "WARN: falling back to paginated mode (patch failed)");
-      const safeProps = _buildGridProps(props, false);
-      return React.createElement(MuiDataGrid_, { ...safeProps, ref });
-    };
-    return React.createElement(
-      MuiThemeProvider_,
-      { theme: _muiDefaultTheme },
-      React.createElement(
-        "div",
-        { ref: containerRef, style: { width: "100%", height: "100%" } },
-        React.createElement(_DataGridGuard, { fallback: fallback }, grid)
-      )
-    );
-  }
-
   return React.createElement(
     MuiThemeProvider_,
     { theme: _muiDefaultTheme },
@@ -2075,7 +2099,7 @@ class DataGrid(rx.Component):
 
     # ---- row detail panel ----
     detail_columns: rx.Var[list[str]]
-    detail_height: rx.Var[int]
+    detail_height: rx.Var[int | str]
     detail_labels: rx.Var[dict[str, str]]
     detail_badge_fields: rx.Var[list[str]]
     detail_badge_colors: rx.Var[dict[str, list[str]]]
