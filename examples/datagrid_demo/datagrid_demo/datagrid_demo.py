@@ -109,37 +109,56 @@ def _build_interpretation(
     )
 
 
+_DEMO_PRS_ROW_COUNT: int = 50
+
+# Canonical traits for synthetic demo rows (IDs are reassigned per row as PGS900000…).
+_PRS_TRAIT_SEEDS: list[tuple[str, str, float, float, str, str, float | None, str, float]] = [
+    ("PGS001781", "Type 2 diabetes (T2D)", 0.035, 51.3, "European", "theoretical", 0.725, "High", 63.0),
+    ("PGS000017", "Coronary artery disease", 2.145, 68.2, "European", "1000G ref", 0.612, "High", 71.0),
+    ("PGS000039", "Rheumatoid arthritis", -0.832, 15.4, "European", "theoretical", 0.581, "Moderate", 55.0),
+    ("PGS000074", "Systemic lupus erythematosus", 1.902, 82.7, "East Asian", "theoretical", None, "Low", 42.0),
+    ("PGS000091", "Atrial fibrillation", 0.567, 61.0, "European", "1000G ref", 0.710, "High", 68.0),
+    ("PGS000182", "Hypertension", -1.340, 8.3, "European", "theoretical", 0.598, "Moderate", 59.0),
+    ("PGS000329", "Stroke", 0.234, 54.1, "European", "theoretical", None, "Low", 47.0),
+    ("PGS000401", "Prostate cancer", 3.891, 95.2, "European", "1000G ref", 0.780, "High", 74.0),
+    ("PGS000512", "Alzheimer's disease", -0.178, 42.6, "European", "theoretical", 0.630, "Moderate", 51.0),
+    ("PGS000618", "Asthma", 1.056, 71.8, "European", "theoretical", 0.550, "Low", 48.0),
+    ("PGS000789", "Major depressive disorder", -0.445, 31.2, "European", "1000G ref", None, "Low", 39.0),
+]
+
+
 def _build_prs_lazyframe() -> pl.LazyFrame:
     import random
 
     random.seed(42)
 
-    prs_records = [
-        {"pgs_id": "PGS001781", "trait": "Type 2 diabetes (T2D)", "score": 0.035,
-         "pct": 51.3, "pop": "European",
-         "method": "theoretical", "auroc": 0.725, "quality": "High",
-         "match": 63.0},
-    ]
-
-    more_traits = [
-        ("PGS000017", "Coronary artery disease", 2.145, 68.2, "European", "1000G ref", 0.612, "High", 71.0),
-        ("PGS000039", "Rheumatoid arthritis", -0.832, 15.4, "European", "theoretical", 0.581, "Moderate", 55.0),
-        ("PGS000074", "Systemic lupus erythematosus", 1.902, 82.7, "East Asian", "theoretical", None, "Low", 42.0),
-        ("PGS000091", "Atrial fibrillation", 0.567, 61.0, "European", "1000G ref", 0.710, "High", 68.0),
-        ("PGS000182", "Hypertension", -1.340, 8.3, "European", "theoretical", 0.598, "Moderate", 59.0),
-        ("PGS000329", "Stroke", 0.234, 54.1, "European", "theoretical", None, "Low", 47.0),
-        ("PGS000401", "Prostate cancer", 3.891, 95.2, "European", "1000G ref", 0.780, "High", 74.0),
-        ("PGS000512", "Alzheimer's disease", -0.178, 42.6, "European", "theoretical", 0.630, "Moderate", 51.0),
-        ("PGS000618", "Asthma", 1.056, 71.8, "European", "theoretical", 0.550, "Low", 48.0),
-        ("PGS000789", "Major depressive disorder", -0.445, 31.2, "European", "1000G ref", None, "Low", 39.0),
-    ]
-    for pgs_id, trait, score, pct, pop, method, auroc, quality, match in more_traits:
-        prs_records.append({
-            "pgs_id": pgs_id, "trait": trait, "score": score,
-            "pct": pct, "pop": pop,
-            "method": method, "auroc": auroc, "quality": quality,
-            "match": match,
-        })
+    prs_records: list[dict[str, Any]] = []
+    n_seeds = len(_PRS_TRAIT_SEEDS)
+    for i in range(_DEMO_PRS_ROW_COUNT):
+        (
+            _seed_id,
+            trait,
+            score,
+            pct,
+            pop,
+            method,
+            auroc,
+            quality,
+            match,
+        ) = _PRS_TRAIT_SEEDS[i % n_seeds]
+        prs_records.append(
+            {
+                "pgs_id": f"PGS9{i:05d}",
+                "trait": trait,
+                "score": round(score + (i % 11) * 0.017 - 0.05, 3),
+                "pct": round(min(99.5, max(0.5, pct + (i % 13) * 1.7 - 11.0)), 1),
+                "pop": pop,
+                "method": method,
+                "auroc": auroc,
+                "quality": quality,
+                "match": round(min(95.0, max(35.0, match + (i % 5) * 2.1 - 4.0)), 1),
+            }
+        )
 
     populations = ["AFR", "AMR", "EAS", "EUR", "SAS"]
     data = []
@@ -723,68 +742,79 @@ def _status_box(*children: rx.Component) -> rx.Component:
 def prs_tab() -> rx.Component:
     """PRS Results tab content with expandable interpretation detail panels."""
     return rx.box(
-        rx.text(
-            "Polygenic Risk Score results with ",
-            rx.text("rich detail panels", weight="bold", as_="span"),
-            ". Click the ",
-            rx.text("\u25B6", as_="span", weight="bold"),
-            " chevron on any row to see key-value risk assessments, "
-            "metric cards for scoring methods, a Plotly bell curve "
-            "chart, and badge warnings -- all rendered from "
-            "structured JSON row data via detail_renderers.",
-            margin_bottom="1em",
-            color="var(--gray-11)",
-        ),
-        rx.cond(
-            AppState.prs_rows.length() > 0,
-            data_grid(
-                rows=AppState.prs_rows,
-                columns=AppState.prs_columns,
-                row_id_field="PGS ID",
-                pagination=False,
-                hide_footer=True,
-                checkbox_selection=True,
-                disable_row_selection_on_click=True,
-                on_row_click=AppState.handle_prs_row_click,
-                detail_columns=[
-                    "risk_hint",
-                    "risk_details",
-                    "risk_methods",
-                    "population_percentiles",
-                    "trait_warnings",
-                    "interpretation",
-                ],
-                detail_labels={
-                    "risk_hint": "Summary",
-                    "risk_details": "Risk Assessment",
-                    "risk_methods": "Scoring Methods",
-                    "population_percentiles": "Population Percentiles",
-                    "trait_warnings": "Warnings",
-                    "interpretation": "Interpretation",
-                },
-                detail_badge_fields=["risk_hint"],
-                detail_renderers={
-                    "risk_details": {"type": "key_value_list"},
-                    "risk_methods": {"type": "metric_list"},
-                    "population_percentiles": {
-                        "type": "bell_curve",
-                        "scaleMin": 0,
-                        "scaleMax": 100,
-                        "height": 330,
-                        "maxWidth": 1120,
-                        "sidePanelTitle": "PRS context",
-                        "bands": [
-                            {"from": 25, "to": 75, "label": "average range"},
-                            {"from": 75, "to": 90, "label": "above average"},
-                            {"from": 90, "to": 100, "label": "high"},
-                        ],
-                    },
-                    "trait_warnings": {"type": "badge_list"},
-                },
-                detail_height=640,
-                height="720px",
+        rx.box(
+            rx.text(
+                "Polygenic Risk Score results with ",
+                rx.text("rich detail panels", weight="bold", as_="span"),
+                ". Click the ",
+                rx.text("\u25B6", as_="span", weight="bold"),
+                " chevron on any row to see key-value risk assessments, "
+                "metric cards for scoring methods, a Plotly bell curve "
+                "chart, and badge warnings -- all rendered from "
+                "structured JSON row data via detail_renderers.",
+                margin_bottom="1em",
+                color="var(--gray-11)",
             ),
-            rx.text("Loading data...", color="var(--gray-9)", font_style="italic"),
+            flex_shrink="0",
+        ),
+        rx.box(
+            rx.cond(
+                AppState.prs_rows.length() > 0,
+                data_grid(
+                    rows=AppState.prs_rows,
+                    columns=AppState.prs_columns,
+                    row_id_field="PGS ID",
+                    pagination=False,
+                    hide_footer=True,
+                    checkbox_selection=True,
+                    disable_row_selection_on_click=True,
+                    on_row_click=AppState.handle_prs_row_click,
+                    detail_columns=[
+                        "risk_hint",
+                        "risk_details",
+                        "risk_methods",
+                        "population_percentiles",
+                        "trait_warnings",
+                        "interpretation",
+                    ],
+                    detail_labels={
+                        "risk_hint": "Summary",
+                        "risk_details": "Risk Assessment",
+                        "risk_methods": "Scoring Methods",
+                        "population_percentiles": "Population Percentiles",
+                        "trait_warnings": "Warnings",
+                        "interpretation": "Interpretation",
+                    },
+                    detail_badge_fields=["risk_hint"],
+                    detail_renderers={
+                        "risk_details": {"type": "key_value_list"},
+                        "risk_methods": {"type": "metric_list"},
+                        "population_percentiles": {
+                            "type": "bell_curve",
+                            "scaleMin": 0,
+                            "scaleMax": 100,
+                            "height": 330,
+                            "maxWidth": 1120,
+                            "sidePanelTitle": "PRS context",
+                            "bands": [
+                                {"from": 25, "to": 75, "label": "average range"},
+                                {"from": 75, "to": 90, "label": "above average"},
+                                {"from": 90, "to": 100, "label": "high"},
+                            ],
+                        },
+                        "trait_warnings": {"type": "badge_list"},
+                    },
+                    detail_height=640,
+                    height="100%",
+                ),
+                rx.text("Loading data...", color="var(--gray-9)", font_style="italic"),
+            ),
+            # Basis 0 so row/detail intrinsic height cannot stretch this pane past the tab —
+            # keeps MUI's vertical scroll usable with expanded accordions.
+            flex="1 1 0%",
+            min_height="0",
+            overflow="hidden",
+            width="100%",
         ),
         rx.box(
             rx.text(AppState.prs_selected, weight="bold"),
@@ -792,8 +822,10 @@ def prs_tab() -> rx.Component:
             padding="1em",
             border_radius="8px",
             background="var(--gray-3)",
+            flex_shrink="0",
         ),
-        height="920px",
+        height="calc(100vh - 160px)",
+        min_height="0",
         display="flex",
         flex_direction="column",
         gap="1em",

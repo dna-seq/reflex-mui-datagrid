@@ -70,6 +70,23 @@ This project is uv based, it is a reflex wrapper for mui x-data-grid UI componen
 - **`rowSelectionModel` requires Set conversion**: MUI DataGrid v8 expects `rowSelectionModel.ids` as a `Set<GridRowId>`, but Python/JSON sends arrays. The JS wrapper must convert arrays to `Set` before passing to MUI.
 - **`row_id_field` with spaces needs bracket notation**: When `row_id_field` contains spaces (e.g. `"PGS ID"`), use `row["PGS ID"]` in JS instead of dot notation to avoid invalid JavaScript.
 
+## Host layout: internal vertical scroll + detail panels (Reflex)
+
+`WrappedDataGrid` / `data_grid(...)` pops `height` onto an outer wrapper (often `height="100%"`). **Percentage height only works if every ancestor has a definite height** (fixed length, flex allocation, or chain of `%` back to a sized root).
+
+**Symptom:** With expanded row detail panels (`detail_columns` / `setPanels`), the **grid loses its vertical scrollbar**, the **page** scrolls instead, or you **cannot scroll to other rows** — especially after layout changes or on tall viewports.
+
+**Root cause (host app, not MUI internals):** A flex item around the grid with **`flex: 1 1 auto`** uses **content-based flex-basis**. Tall expanded detail content increases that item’s intrinsic minimum height, so the **grid shell grows with the accordion** instead of staying within the tab/viewport. `max_height` alone (including `vh`/`calc`) does **not** fix participation of intrinsic height in the same way as a **zero flex-basis** slot.
+
+**Fix pattern (copy into any similar page):**
+
+1. Outer column: `display="flex"`, `flex_direction="column"`, **`height="calc(100vh - <chrome>)`**, **`min_height="0"`** (and optional `gap`).
+2. **Non-growing blocks** above/below the grid (titles, toolbars, stats): wrap or style with **`flex_shrink="0"`**.
+3. **Grid shell** `rx.box`: **`flex="1 1 0%"`**, **`min_height="0"`**, **`overflow="hidden"`**, **`width="100%"`** — takes **only remaining column space**, not content-driven height.
+4. **`data_grid(..., height="100%", pagination=False, hide_footer=True, …)`** as usual.
+
+**Reusable prompt (paste into an assistant):** *“MUI X DataGrid in Reflex with reflex-mui-datagrid: expanded detail panels broke internal vertical scrolling / page steals scroll. Parent uses flex column and WrappedDataGrid with height 100%. Apply the flex `1 1 0%` + `min_height 0` + `overflow hidden` grid shell pattern; bounded viewport column root `calc(100vh - chrome)`. Diagnose host CSS flex basis before changing pagination or datagrid.js.”*
+
 ## Bell Curve Renderer (CRITICAL)
 
 The `bell_curve` detail renderer (`_BellCurveRenderer` in `datagrid.py`) draws a Plotly normal distribution with per-point markers, a "your score" line, and population/model labels. It has a strict separation between **layout** (chart aspect, margins, legend, y-axis range) and **label placement** (collision-aware annotations). Both have configurable knobs, but **layout defaults are sacred** — they preserve the historical bell curve aspect and must not be changed casually.
@@ -91,6 +108,7 @@ The `bell_curve` detail renderer (`_BellCurveRenderer` in `datagrid.py`) draws a
 - **Paginated fallback for `pagination=False` DO NOT WORK**: Falling back to `autoPageSize` pagination when the unlimited-grid patch is inactive traps lazy-grid users on a small manual page (for example `1-8 of 114`) even though the backend loaded all rows. For dynamic scrolling, always forward `pagination=false`, `autoPageSize=false`, and a hidden footer to MUI; let MUI virtualization handle the currently loaded rows while `LazyFrameGrid` appends more chunks.
 - **Changing bell curve layout defaults (`marginTop`, `marginBottom`, `legendY`, `yAxisMax`) to fix overlapping labels DOES NOT WORK and breaks the curve**: Increasing top/bottom margins or expanding the y-axis range to make room for labels visibly squashes the bell curve into a smaller fraction of the chart, changing the curve's aspect and visual proportion. Users notice immediately. The correct fix is to update only the **label placement algorithm** (`_bellCurveLabelOffset`) — bigger horizontal stagger, more vertical tiers, smarter collision detection. Treat layout defaults as immutable defaults; expose them as configurable knobs for the rare app that genuinely needs more headroom, but never change the defaults to paper over a label issue.
 - **Vertical-only label stacking with small step (`labelYOffsetStep < 16`) overlaps labels visually**: Population/model labels are ~12–14 px tall; stacking at 13 px increments leaves them touching. Either use a 3-column grid (center / left / right at each row, so close-by labels separate horizontally before stacking) or use `labelYOffsetStep ≥ 16`. Pure horizontal staggering with no vertical tier produces arrow lines that cross every other label arrow. The shipped algorithm combines both: spread horizontally first, then stack vertically only when the grid row is full.
+- **`flex: 1 1 auto` on the grid wrapper + tall detail panels DO NOT preserve grid-internal vertical scroll**: Intrinsic height from expanded panels participates in sizing; the wrapper grows and MUI no longer behaves like a fixed-height viewport. Use **`flex: 1 1 0%`**, **`min-height: 0`**, **`overflow: hidden`** on the grid shell inside a **height-bounded** column flex parent — see **Host layout: internal vertical scroll + detail panels** above. Do not assume **`max_height`** alone fixes flex basis behavior.
 
 ## Coding Standards
 

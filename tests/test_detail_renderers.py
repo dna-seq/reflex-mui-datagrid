@@ -340,7 +340,7 @@ class TestBellCurveSupport:
         from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
 
         assert 'margin: "0 auto"' not in _INLINE_WRAPPER_JS
-        assert 'margin: "0"' in _INLINE_WRAPPER_JS
+        assert 'display: "grid"' in _INLINE_WRAPPER_JS
 
     def test_percentile_renderers_have_right_side_panel(self) -> None:
         from reflex_mui_datagrid.datagrid import _INLINE_WRAPPER_JS
