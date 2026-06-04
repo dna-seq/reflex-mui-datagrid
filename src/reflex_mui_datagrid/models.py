@@ -99,6 +99,7 @@ class DetailRendererConfig(BaseModel):
         "metric_list",
         "badge_list",
         "link_list",
+        "button_links",
         "percentile_spread",
         "bell_curve",
     ]

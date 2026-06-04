@@ -763,6 +763,71 @@ function _renderLinkList(data, config) {
   }, ...links);
 }
 
+// ---- Rich detail renderer: button_links ----
+// Renders an array of {label, url, color, icon?} as styled buttons.
+// Config: size ("small"|"medium"|"large", default "medium"),
+//         gap (px, default 12), variant ("filled"|"outlined", default "filled").
+// icon: inline SVG path string rendered at 20x20.
+function _renderButtonLinks(data, config) {
+  if (!Array.isArray(data)) return null;
+  var sz = (config && config.size) || "medium";
+  var gap = (config && config.gap != null) ? config.gap : 12;
+  var variant = (config && config.variant) || "filled";
+  var target = (config && config.target) || "_blank";
+  var padMap = { small: "6px 14px", medium: "10px 20px", large: "14px 28px" };
+  var fontMap = { small: 12, medium: 14, large: 16 };
+  var iconSz = { small: 16, medium: 20, large: 24 };
+  var pad = padMap[sz] || padMap.medium;
+  var fs = fontMap[sz] || fontMap.medium;
+  var iSz = iconSz[sz] || iconSz.medium;
+
+  var buttons = data.map(function(item, i) {
+    if (!item || !item.url) return null;
+    var label = item.label || "Link";
+    var color = item.color || "#1565c0";
+    var isFilled = variant === "filled";
+    var style = {
+      display: "inline-flex", alignItems: "center", gap: 8,
+      padding: pad, borderRadius: 8,
+      fontSize: fs, fontWeight: 600, lineHeight: 1,
+      textDecoration: "none", cursor: "pointer",
+      border: isFilled ? "none" : ("2px solid " + color),
+      background: isFilled ? color : "transparent",
+      color: isFilled ? "#ffffff" : color,
+      transition: "opacity 0.15s, box-shadow 0.15s",
+    };
+    var iconEl = null;
+    if (item.iconUrl) {
+      iconEl = React.createElement("img", {
+        key: "icon",
+        src: item.iconUrl,
+        width: iSz, height: iSz,
+        alt: "",
+        style: { flexShrink: 0 },
+      });
+    } else if (item.icon) {
+      iconEl = React.createElement("svg", {
+        key: "icon",
+        xmlns: "http://www.w3.org/2000/svg",
+        width: iSz, height: iSz,
+        viewBox: item.iconViewBox || "0 0 24 24",
+        fill: "currentColor",
+        style: { flexShrink: 0 },
+      }, React.createElement("path", { d: item.icon }));
+    }
+    return React.createElement("a", {
+      key: i, href: item.url, target: target,
+      rel: "noopener noreferrer", style: style,
+      onMouseEnter: function(e) { e.currentTarget.style.opacity = "0.85"; e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.18)"; },
+      onMouseLeave: function(e) { e.currentTarget.style.opacity = "1"; e.currentTarget.style.boxShadow = "none"; },
+    }, iconEl, label);
+  }).filter(Boolean);
+
+  return React.createElement("div", {
+    style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: gap, padding: "8px 0" },
+  }, ...buttons);
+}
+
 // ---- Rich detail renderer: key_value_list ----
 function _renderKeyValueList(data) {
   if (!Array.isArray(data)) return null;
@@ -1519,6 +1584,8 @@ function _buildDetailPanelElement(row, detailCols, detailLabels, columns, badgeF
         richEl = _renderBadgeList(parsed);
       } else if (rtype === "link_list" && Array.isArray(parsed)) {
         richEl = _renderLinkList(parsed, rendererCfg);
+      } else if (rtype === "button_links" && Array.isArray(parsed)) {
+        richEl = _renderButtonLinks(parsed, rendererCfg);
       } else if (rtype === "key_value_list" && Array.isArray(parsed)) {
         richEl = _renderKeyValueList(parsed);
       } else if (rtype === "metric_list" && Array.isArray(parsed)) {

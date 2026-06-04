@@ -266,6 +266,32 @@ def _build_prs_lazyframe() -> pl.LazyFrame:
             "risk_methods": methods_list,
             "population_percentiles": population_percentiles,
             "trait_warnings": warnings,
+            "ai_ask": [
+                {
+                    "label": "Ask ChatGPT",
+                    "url": f"https://chatgpt.com/?q=Interpret+PRS+for+{rec['trait'].replace(' ', '+')}+percentile+{rec['pct']:.0f}",
+                    "color": "#10A37F",
+                    "iconUrl": "/openai.svg",
+                },
+                {
+                    "label": "Ask Claude",
+                    "url": f"https://claude.ai/new?q=Interpret+PRS+for+{rec['trait'].replace(' ', '+')}+percentile+{rec['pct']:.0f}",
+                    "color": "#DA7756",
+                    "iconUrl": "/anthropic.svg",
+                },
+                {
+                    "label": "Ask Perplexity",
+                    "url": f"https://www.perplexity.ai/search?q=Interpret+PRS+for+{rec['trait'].replace(' ', '+')}+percentile+{rec['pct']:.0f}",
+                    "color": "#21808D",
+                    "iconUrl": "/perplexity.svg",
+                },
+                {
+                    "label": "Ask Grok",
+                    "url": f"https://grok.com/?q=Interpret+PRS+for+{rec['trait'].replace(' ', '+')}+percentile+{rec['pct']:.0f}",
+                    "color": "#1D1D1F",
+                    "iconUrl": "/grok.svg",
+                },
+            ],
         }
         data.append(row)
     return pl.LazyFrame(data)
@@ -441,7 +467,7 @@ class AppState(rx.State):
             "risk_hint", "interpretation",
             "reference_source", "Population",
             "risk_details", "risk_methods",
-            "population_percentiles", "trait_warnings",
+            "population_percentiles", "trait_warnings", "ai_ask",
         }
 
         population_colors: dict[str, tuple[str, str]] = {
@@ -776,6 +802,7 @@ def prs_tab() -> rx.Component:
                         "population_percentiles",
                         "trait_warnings",
                         "interpretation",
+                        "ai_ask",
                     ],
                     detail_labels={
                         "risk_hint": "Summary",
@@ -784,6 +811,7 @@ def prs_tab() -> rx.Component:
                         "population_percentiles": "Population Percentiles",
                         "trait_warnings": "Warnings",
                         "interpretation": "Interpretation",
+                        "ai_ask": "Ask AI for Interpretation",
                     },
                     detail_badge_fields=["risk_hint"],
                     detail_renderers={
@@ -803,6 +831,7 @@ def prs_tab() -> rx.Component:
                             ],
                         },
                         "trait_warnings": {"type": "badge_list"},
+                        "ai_ask": {"type": "button_links", "size": "medium", "gap": 12},
                     },
                     detail_height=640,
                     height="100%",
