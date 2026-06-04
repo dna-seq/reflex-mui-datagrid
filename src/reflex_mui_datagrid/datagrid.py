@@ -1741,6 +1741,8 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
   const containerRef = React.useRef(null);
   const scrollEndLockedRef = React.useRef(false);
   const renderCountRef = React.useRef(0);
+  const prevRowsLengthRef = React.useRef(0);
+  const savedScrollTopRef = React.useRef(null);
   const rowsLength = Array.isArray(props.rows) ? props.rows.length : 0;
 
   // Row detail panel: track which rows are expanded.
@@ -1753,6 +1755,35 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     pagination: props.pagination,
     patchActive: _muiPatchActive,
   });
+
+  // Save scroll position before React commits DOM changes when rows grow
+  // (append).  For a full replace (rowsLength <= prev) we intentionally
+  // do NOT restore — the grid should jump to the top.
+  if (rowsLength > prevRowsLengthRef.current && prevRowsLengthRef.current > 0) {
+    const container = containerRef.current;
+    if (container) {
+      const scroller = container.querySelector(".MuiDataGrid-virtualScroller");
+      if (scroller) {
+        savedScrollTopRef.current = scroller.scrollTop;
+      }
+    }
+  }
+
+  // Restore scroll position synchronously before paint when rows are appended.
+  React.useLayoutEffect(() => {
+    if (savedScrollTopRef.current !== null) {
+      const container = containerRef.current;
+      if (container) {
+        const scroller = container.querySelector(".MuiDataGrid-virtualScroller");
+        if (scroller) {
+          scroller.scrollTop = savedScrollTopRef.current;
+          _dgLog(log, "scroll restored", { scrollTop: savedScrollTopRef.current, rows: rowsLength });
+        }
+      }
+      savedScrollTopRef.current = null;
+    }
+    prevRowsLengthRef.current = rowsLength;
+  }, [rowsLength, log]);
 
   // Unlock when new rows arrive so another near-end trigger can fire.
   React.useEffect(() => {
