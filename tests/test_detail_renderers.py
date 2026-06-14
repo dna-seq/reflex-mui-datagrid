@@ -14,6 +14,7 @@ import pytest
 
 from reflex_mui_datagrid.polars_utils import (
     _dataframe_to_dicts,
+    apply_filter_model,
     lazyframe_to_datagrid,
 )
 
@@ -96,6 +97,71 @@ class TestDataframeToDictsPreservesStructuredData:
         assert pct["items"][0]["label"] == "PGS1"
         assert pct["items"][0]["tone"] == "warning"
         assert pct["outliers"] == ["PGS3"]
+
+
+class TestServerSideStringFilters:
+    """Server-side DataGrid text filters should match MUI's case-insensitive UX."""
+
+    def test_string_contains_is_case_insensitive(self) -> None:
+        df = pl.DataFrame(
+            {
+                "pgs_id": ["PGS1", "PGS2", "PGS3"],
+                "trait": ["Fluid intelligence score", "Intelligence quotient", "Breast cancer"],
+            }
+        )
+        lower = apply_filter_model(
+            df.lazy(),
+            {"items": [{"field": "trait", "operator": "contains", "value": "intellig"}]},
+        ).collect()
+        mixed = apply_filter_model(
+            df.lazy(),
+            {"items": [{"field": "trait", "operator": "contains", "value": "Intellig"}]},
+        ).collect()
+
+        assert lower["pgs_id"].to_list() == ["PGS1", "PGS2"]
+        assert mixed["pgs_id"].to_list() == lower["pgs_id"].to_list()
+
+    def test_string_equals_starts_and_ends_are_case_insensitive(self) -> None:
+        df = pl.DataFrame({"trait": ["Fluid Intelligence", "crystallized intelligence"]})
+
+        equals = apply_filter_model(
+            df.lazy(),
+            {"items": [{"field": "trait", "operator": "equals", "value": "fluid intelligence"}]},
+        ).collect()
+        starts = apply_filter_model(
+            df.lazy(),
+            {"items": [{"field": "trait", "operator": "startsWith", "value": "CRYSTALLIZED"}]},
+        ).collect()
+        ends = apply_filter_model(
+            df.lazy(),
+            {"items": [{"field": "trait", "operator": "endsWith", "value": "INTELLIGENCE"}]},
+        ).collect()
+
+        assert equals["trait"].to_list() == ["Fluid Intelligence"]
+        assert starts["trait"].to_list() == ["crystallized intelligence"]
+        assert ends["trait"].to_list() == ["Fluid Intelligence", "crystallized intelligence"]
+
+    def test_string_filter_can_be_case_sensitive(self) -> None:
+        df = pl.DataFrame({"trait": ["Fluid Intelligence", "fluid intelligence"]})
+
+        filtered = apply_filter_model(
+            df.lazy(),
+            {"items": [{"field": "trait", "operator": "contains", "value": "Fluid"}]},
+            string_filter_mode="case_sensitive",
+        ).collect()
+
+        assert filtered["trait"].to_list() == ["Fluid Intelligence"]
+
+    def test_string_filter_can_use_regex(self) -> None:
+        df = pl.DataFrame({"trait": ["Fluid intelligence", "Intelligence quotient", "Breast cancer"]})
+
+        filtered = apply_filter_model(
+            df.lazy(),
+            {"items": [{"field": "trait", "operator": "contains", "value": "^(Fluid|Intelligence)"}]},
+            string_filter_mode="regex",
+        ).collect()
+
+        assert filtered["trait"].to_list() == ["Fluid intelligence", "Intelligence quotient"]
 
 
 class TestLazyframeToDatagridWithStructuredData:

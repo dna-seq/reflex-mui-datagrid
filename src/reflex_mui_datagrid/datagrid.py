@@ -508,6 +508,13 @@ function _buildGridProps(props, unlimitedMode) {
     renderedColumns, showDescriptionInHeader
   );
   const ep = { ...rest, columns: enhancedColumns };
+  // MUI X Community uses the internal `signature` prop to enforce MIT-only
+  // behavior such as the 100-row page-size cap.  Mutating GridSignature is not
+  // reliable after Vite pre-bundling, so pass a non-Community signature
+  // explicitly for this wrapper's continuous-scroll mode.
+  if (ep.signature === undefined) {
+    ep.signature = "DataGrid_Unlimited";
+  }
 
   // Fix icon ordering in column headers.
   // MUI's columnHeaderTitleContainer is a flex row.  Its children vary:
@@ -659,6 +666,10 @@ function _buildGridProps(props, unlimitedMode) {
     // Real continuous-scroll mode: MUI virtualizes the loaded rows without
     // page controls, while LazyFrameGrid appends new server-side chunks.
     ep.pagination = false;
+    // MIT DataGrid forcibly turns pagination back on inside useDataGridProps().
+    // Server pagination mode keeps the footer hidden while making the visible
+    // row selector expose every loaded row instead of the first 100-row page.
+    ep.paginationMode = ep.paginationMode || ep.pagination_mode || "server";
     ep.autoPageSize = false;
     if (ep.hideFooter === undefined) ep.hideFooter = true;
   } else if (pagination !== undefined) {
@@ -1739,6 +1750,7 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
   const { onRowsScrollEnd, scrollEndThreshold, debugLog } = props;
   const log = !!debugLog;
   const containerRef = React.useRef(null);
+  const localApiRef = useGridApiRef_();
   const scrollEndLockedRef = React.useRef(false);
   const renderCountRef = React.useRef(0);
   const prevRowsLengthRef = React.useRef(0);
@@ -1769,6 +1781,39 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
     }
   }
 
+  const checkScrollEnd = React.useCallback(() => {
+    if (typeof onRowsScrollEnd !== "function") return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const scroller = container.querySelector(".MuiDataGrid-virtualScroller");
+    if (!scroller) {
+      _dgLog(log, "WARN: .MuiDataGrid-virtualScroller not found");
+      return;
+    }
+
+    const threshold =
+      typeof scrollEndThreshold === "number" ? scrollEndThreshold : 160;
+    const remaining =
+      scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+
+    if (remaining <= threshold) {
+      if (!scrollEndLockedRef.current) {
+        scrollEndLockedRef.current = true;
+        const payload = {
+          scrollTop: scroller.scrollTop,
+          scrollHeight: scroller.scrollHeight,
+          clientHeight: scroller.clientHeight,
+          remaining: remaining,
+        };
+        _dgLog(log, "scroll-end fired", payload);
+        onRowsScrollEnd(payload);
+      }
+    } else if (remaining > threshold * 2) {
+      scrollEndLockedRef.current = false;
+    }
+  }, [onRowsScrollEnd, scrollEndThreshold, log]);
+
   // Restore scroll position synchronously before paint when rows are appended.
   React.useLayoutEffect(() => {
     if (savedScrollTopRef.current !== null) {
@@ -1782,14 +1827,21 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
       }
       savedScrollTopRef.current = null;
     }
+    const api = localApiRef.current;
+    if (api) {
+      if (typeof api.resize === "function") api.resize();
+      if (typeof api.resetRowHeights === "function") api.resetRowHeights();
+    }
     prevRowsLengthRef.current = rowsLength;
-  }, [rowsLength, log]);
+  }, [rowsLength, log, localApiRef]);
 
   // Unlock when new rows arrive so another near-end trigger can fire.
   React.useEffect(() => {
     scrollEndLockedRef.current = false;
     _dgLog(log, "rows updated", { count: rowsLength });
-  }, [rowsLength, log]);
+    const rafId = requestAnimationFrame(() => checkScrollEnd());
+    return () => cancelAnimationFrame(rafId);
+  }, [rowsLength, log, checkScrollEnd]);
 
   // Attach scroll listener to MUI virtual scroller.
   React.useEffect(() => {
@@ -1807,37 +1859,13 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
       clientHeight: scroller.clientHeight,
     });
 
-    const threshold =
-      typeof scrollEndThreshold === "number" ? scrollEndThreshold : 160;
-
-    const onScroll = () => {
-      const remaining =
-        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-
-      if (remaining <= threshold) {
-        if (!scrollEndLockedRef.current) {
-          scrollEndLockedRef.current = true;
-          const payload = {
-            scrollTop: scroller.scrollTop,
-            scrollHeight: scroller.scrollHeight,
-            clientHeight: scroller.clientHeight,
-            remaining: remaining,
-          };
-          _dgLog(log, "scroll-end fired", payload);
-          onRowsScrollEnd(payload);
-        }
-      } else if (remaining > threshold * 2) {
-        scrollEndLockedRef.current = false;
-      }
-    };
-
-    scroller.addEventListener("scroll", onScroll, { passive: true });
-    const rafId = requestAnimationFrame(() => onScroll());
+    scroller.addEventListener("scroll", checkScrollEnd, { passive: true });
+    const rafId = requestAnimationFrame(() => checkScrollEnd());
     return () => {
       cancelAnimationFrame(rafId);
-      scroller.removeEventListener("scroll", onScroll);
+      scroller.removeEventListener("scroll", checkScrollEnd);
     };
-  }, [onRowsScrollEnd, scrollEndThreshold, log]);
+  }, [checkScrollEnd, log]);
 
   // _applyFilter listener for server-side filtering.
   const realOnFilterModelChange = props.onFilterModelChange;
@@ -1873,6 +1901,9 @@ const UnlimitedDataGrid = React.forwardRef((props, ref) => {
 
   // ---- Build effective props ----
   const effectiveProps = _buildGridProps(props, _muiPatchActive);
+  if (!effectiveProps.apiRef) {
+    effectiveProps.apiRef = localApiRef;
+  }
 
   // ---- Detail panel: expander column + onCellClick toggle ----
   const _detailCols = props.detailColumns || props.detail_columns;
@@ -2125,6 +2156,11 @@ class DataGrid(rx.Component):
                 rx.ImportVar(
                     tag="GridFilterPanel",
                     alias="GridFilterPanel_",
+                    install=False,
+                ),
+                rx.ImportVar(
+                    tag="useGridApiRef",
+                    alias="useGridApiRef_",
                     install=False,
                 ),
             ],

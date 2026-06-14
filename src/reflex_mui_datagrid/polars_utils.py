@@ -7,6 +7,8 @@ import reflex as rx
 
 from reflex_mui_datagrid.models import ColumnDef
 
+StringFilterMode = Literal["case_insensitive", "case_sensitive", "regex"]
+
 
 def polars_dtype_to_grid_type(dtype: pl.DataType) -> str:
     """Map a polars DataType to the closest MUI DataGrid column type.
@@ -323,6 +325,7 @@ def _resolve_field_name(field: str, schema: pl.Schema) -> str | None:
 def _build_filter_expr(
     item: dict[str, Any],
     schema: pl.Schema,
+    string_filter_mode: StringFilterMode = "case_insensitive",
 ) -> pl.Expr | None:
     """Translate a single MUI DataGrid filter item to a Polars expression.
 
@@ -349,6 +352,8 @@ def _build_filter_expr(
     dtype = schema[field]
     grid_type = polars_dtype_to_grid_type(dtype)
     str_col = _col_to_str_expr(col, dtype)
+    use_case_insensitive = string_filter_mode == "case_insensitive"
+    compare_col = str_col.str.to_lowercase() if use_case_insensitive else str_col
 
     # -- operators that don't need a value --
     if operator == "isEmpty":
@@ -377,25 +382,44 @@ def _build_filter_expr(
 
     # -- singleSelect operators --
     if operator == "is":
-        return str_col == str(value)
+        compare_value = str(value).lower() if use_case_insensitive else str(value)
+        return compare_col == compare_value
     if operator == "not":
-        return str_col != str(value)
+        compare_value = str(value).lower() if use_case_insensitive else str(value)
+        return compare_col != compare_value
     if operator == "isAnyOf":
         if not isinstance(value, list):
             return None
-        return str_col.is_in([str(v) for v in value])
+        compare_values = (
+            [str(v).lower() for v in value]
+            if use_case_insensitive
+            else [str(v) for v in value]
+        )
+        return compare_col.is_in(compare_values)
 
     # -- string operators --
     if grid_type == "string" or _is_categorical_dtype(dtype):
-        str_value = str(value)
+        if string_filter_mode == "regex":
+            pattern = str(value)
+            if operator == "contains":
+                return str_col.str.contains(pattern, literal=False)
+            if operator == "equals":
+                return str_col.str.contains(f"^(?:{pattern})$", literal=False)
+            if operator == "startsWith":
+                return str_col.str.contains(f"^(?:{pattern})", literal=False)
+            if operator == "endsWith":
+                return str_col.str.contains(f"(?:{pattern})$", literal=False)
+            return None
+
+        str_value = str(value).lower() if use_case_insensitive else str(value)
         if operator == "contains":
-            return str_col.str.contains(str_value, literal=True)
+            return compare_col.str.contains(str_value, literal=True)
         if operator == "equals":
-            return str_col == str_value
+            return compare_col == str_value
         if operator == "startsWith":
-            return str_col.str.starts_with(str_value)
+            return compare_col.str.starts_with(str_value)
         if operator == "endsWith":
-            return str_col.str.ends_with(str_value)
+            return compare_col.str.ends_with(str_value)
         return None
 
     # -- numeric operators --
@@ -460,6 +484,7 @@ def apply_filter_model(
     lf: pl.LazyFrame,
     filter_model: dict[str, Any],
     schema: pl.Schema | None = None,
+    string_filter_mode: StringFilterMode = "case_insensitive",
 ) -> pl.LazyFrame:
     """Apply a MUI DataGrid filter model to a Polars LazyFrame.
 
@@ -489,6 +514,10 @@ def apply_filter_model(
         filter_model: MUI DataGrid filter model dict.
         schema: Optional schema override.  If ``None``, the schema is
             obtained from ``lf.collect_schema()``.
+        string_filter_mode: Text matching behavior for string and categorical
+            columns. ``"case_insensitive"`` lowercases both sides for literal
+            matching, ``"case_sensitive"`` preserves exact literal matching,
+            and ``"regex"`` treats filter values as Polars regular expressions.
 
     Returns:
         The filtered ``pl.LazyFrame``.
@@ -504,7 +533,11 @@ def apply_filter_model(
 
     exprs: list[pl.Expr] = []
     for item in items:
-        expr = _build_filter_expr(item, schema)
+        expr = _build_filter_expr(
+            item,
+            schema,
+            string_filter_mode=string_filter_mode,
+        )
         if expr is not None:
             exprs.append(expr)
 

@@ -40,6 +40,7 @@ import reflex as rx
 
 from reflex_mui_datagrid.datagrid import data_grid
 from reflex_mui_datagrid.polars_utils import (
+    StringFilterMode,
     _dataframe_to_dicts,
     _resolve_field_name,
     apply_filter_model,
@@ -72,6 +73,7 @@ class _LazyFrameCache:
         self.col_defs: list[dict[str, Any]] = []
         self.total_rows: int = 0
         self.value_options_max_unique: int = _DEFAULT_VALUE_OPTIONS_MAX_UNIQUE
+        self.string_filter_mode: StringFilterMode = "case_insensitive"
         # Lazily computed per-column value options.
         # None means "not yet computed"; empty list means "computed, too many".
         self._value_options_cache: dict[str, list[str] | None] = {}
@@ -384,6 +386,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         eager_value_options_row_limit: int = _DEFAULT_EAGER_VALUE_OPTIONS_ROW_LIMIT,
         column_overrides: dict[str, dict[str, Any]] | None = None,
         non_filterable_fields: Iterable[str] | None = None,
+        string_filter_mode: StringFilterMode = "case_insensitive",
     ):
         """Prepare a LazyFrame for server-side browsing.
 
@@ -427,6 +430,12 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             non_filterable_fields: Optional iterable of field names whose
                 column filters should be disabled.  Field names are resolved
                 case-insensitively against the LazyFrame schema.
+            string_filter_mode: Server-side text matching behavior for string
+                and categorical columns. ``"case_insensitive"`` (default)
+                lowercases both column and filter value for literal matching,
+                ``"case_sensitive"`` preserves the exact literal behavior, and
+                ``"regex"`` treats string filter values as Polars regular
+                expressions.
         """
         self.lf_grid_loading = True  # type: ignore[assignment]
         self.lf_grid_selected_info = "Preparing LazyFrame..."  # type: ignore[assignment]
@@ -440,6 +449,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         cache.lf = lf
         cache.descriptions = descriptions or {}
         cache.value_options_max_unique = value_options_max_unique
+        cache.string_filter_mode = string_filter_mode
         cache._value_options_cache = {}  # reset on new LazyFrame
 
         # Schema is cheap -- metadata only, no data scan.
@@ -971,7 +981,12 @@ class LazyFrameGridMixin(rx.State, mixin=True):
 
         # Apply filter.
         if self._lf_grid_filter and self._lf_grid_filter.get("items"):
-            lf = apply_filter_model(lf, self._lf_grid_filter, cache.schema)
+            lf = apply_filter_model(
+                lf,
+                self._lf_grid_filter,
+                cache.schema,
+                string_filter_mode=cache.string_filter_mode,
+            )
 
         # Count filtered rows when the stream is reset.
         # This is a lightweight query -- Polars pushes ``select(len())``
