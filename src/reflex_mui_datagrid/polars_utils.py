@@ -103,8 +103,8 @@ def _detect_single_select(
     should fall back to the text filter operators.
     """
     if _is_categorical_dtype(dtype):
-        values = df[col_name].cast(pl.String).unique().drop_nulls().sort().to_list()
-        return values
+        values = df[col_name].cast(pl.String).unique().drop_nulls().to_list()
+        return sorted(str(v) for v in values)
 
     if not isinstance(dtype, pl.String):
         return None
@@ -112,9 +112,9 @@ def _detect_single_select(
     if df.height == 0:
         return None
 
-    unique_vals: list[str] = df[col_name].unique().drop_nulls().sort().to_list()
+    unique_vals = [str(v) for v in df[col_name].unique().drop_nulls().to_list()]
     if len(unique_vals) <= max_unique_abs:
-        return unique_vals
+        return sorted(unique_vals)
 
     return None
 
@@ -561,6 +561,69 @@ def apply_filter_model(
 # ---------------------------------------------------------------------------
 
 
+def _normalize_sort_keys(
+    sort_model: list[dict[str, str]],
+    schema: pl.Schema,
+) -> list[tuple[str, bool]]:
+    """Resolve MUI sort-model entries to ``(field, descending)`` pairs."""
+    keys: list[tuple[str, bool]] = []
+    for entry in sort_model:
+        raw_field = entry.get("field")
+        direction = entry.get("sort", "asc")
+        if raw_field is None:
+            continue
+        field = _resolve_field_name(raw_field, schema)
+        if field is None:
+            continue
+        keys.append((field, direction == "desc"))
+    return keys
+
+
+def sort_dataframe_model(
+    df: pl.DataFrame,
+    sort_model: list[dict[str, str]],
+    schema: pl.Schema | None = None,
+) -> pl.DataFrame:
+    """Sort a DataFrame from a MUI sort model without Polars' parallel sort.
+
+    Polars ``DataFrame.sort`` / ``LazyFrame.sort().collect()`` can silently
+    deadlock the Granian worker thread used by Reflex fullstack production
+    (``reflex run --env prod`` / ``uv run serve``). Unsorted ``collect()`` and
+    plain Python sorting remain safe on that thread.
+
+    This helper sorts via Python ``list.sort`` over row indices, then gathers
+    with Polars take/gather — no Rayon sort kernel is invoked.
+    """
+    if not sort_model or df.height == 0:
+        return df
+
+    if schema is None:
+        schema = df.schema
+
+    keys = _normalize_sort_keys(sort_model, schema)
+    if not keys:
+        return df
+
+    indices = list(range(df.height))
+    # Apply later keys first so the primary sort field wins (stable sorts).
+    for field, descending in reversed(keys):
+        col_values = df.get_column(field).to_list()
+
+        def _key(i: int, values: list[Any] = col_values) -> tuple[bool, Any]:
+            val = values[i]
+            # Nulls last for both directions, matching typical grid UX.
+            if val is None:
+                return (True, "")
+            return (False, val)
+
+        indices.sort(key=_key, reverse=descending)
+
+    # Rebuild via named rows — avoid ``df[indices]`` / take/gather, which can
+    # still enter Polars parallel kernels on some versions under Granian.
+    rows = df.rows(named=True)
+    return pl.DataFrame([rows[i] for i in indices], schema=df.schema, orient="row")
+
+
 def apply_sort_model(
     lf: pl.LazyFrame,
     sort_model: list[dict[str, str]],
@@ -570,6 +633,13 @@ def apply_sort_model(
 
     Translates the MUI ``sortModel`` array into a ``lf.sort()`` call and
     returns the sorted LazyFrame — **no collect**.
+
+    .. warning::
+
+        Do **not** call ``.collect()`` on the result from a Reflex / Granian
+        fullstack worker thread — Polars' parallel sort can deadlock there.
+        Prefer :func:`sort_dataframe_model` after an unsorted ``collect()``
+        (see ``LazyFrameGridMixin._refresh_lf_grid_page``).
 
     Field names are resolved case-insensitively against the schema to
     handle any case mismatches from the frontend serialisation layer.
@@ -596,23 +666,12 @@ def apply_sort_model(
     if schema is None:
         schema = lf.collect_schema()
 
-    by: list[str] = []
-    descending: list[bool] = []
-
-    for entry in sort_model:
-        raw_field = entry.get("field")
-        direction = entry.get("sort", "asc")
-        if raw_field is None:
-            continue
-        field = _resolve_field_name(raw_field, schema)
-        if field is None:
-            continue
-        by.append(field)
-        descending.append(direction == "desc")
-
-    if not by:
+    keys = _normalize_sort_keys(sort_model, schema)
+    if not keys:
         return lf
 
+    by = [field for field, _ in keys]
+    descending = [desc for _, desc in keys]
     return lf.sort(by=by, descending=descending)
 
 

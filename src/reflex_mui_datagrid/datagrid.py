@@ -438,7 +438,8 @@ function _buildGridProps(props, unlimitedMode) {
       colRest.renderCell = (params) => {
         const val = params.value;
         const formattedVal = params.formattedValue || val;
-        if (val == null) return "";
+        // Skip null/undefined/blank — empty pills look like missing colors.
+        if (val == null || String(val).trim() === "") return "";
         let c = cfg.color || "";
         let bg = cfg.bgColor || "";
         const colorMap = cfg.colorMap || {};
@@ -454,8 +455,8 @@ function _buildGridProps(props, unlimitedMode) {
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
-            fontWeight: "500",
-            fontSize: "0.85em",
+            fontWeight: cfg.fontWeight || "500",
+            fontSize: cfg.fontSize || "0.85em",
             lineHeight: "1.2",
             minWidth: "24px",
             textAlign: "center",

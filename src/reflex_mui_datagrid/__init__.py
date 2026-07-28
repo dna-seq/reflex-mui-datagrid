@@ -43,6 +43,7 @@ from reflex_mui_datagrid.polars_utils import (
     lazyframe_to_datagrid,
     polars_dtype_to_grid_type,
     show_dataframe,
+    sort_dataframe_model,
 )
 
 # Optional polars-bio integration – available when installed with [bio] extra.

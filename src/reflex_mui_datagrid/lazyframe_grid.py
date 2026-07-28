@@ -30,6 +30,7 @@ Typical usage::
         return rx.cond(MyState.lf_grid_loaded, lazyframe_grid(MyState))
 """
 
+import concurrent.futures
 import json
 import time
 from pathlib import Path
@@ -44,8 +45,8 @@ from reflex_mui_datagrid.polars_utils import (
     _dataframe_to_dicts,
     _resolve_field_name,
     apply_filter_model,
-    apply_sort_model,
     build_column_defs_from_schema,
+    sort_dataframe_model,
 )
 
 
@@ -77,6 +78,9 @@ class _LazyFrameCache:
         # Lazily computed per-column value options.
         # None means "not yet computed"; empty list means "computed, too many".
         self._value_options_cache: dict[str, list[str] | None] = {}
+        # Granian-safe sorted materialization cache (filter+sort key → DataFrame).
+        self._sorted_df: pl.DataFrame | None = None
+        self._sorted_cache_key: tuple[Any, ...] | None = None
 
 
 _cache_registry: dict[str, _LazyFrameCache] = {}
@@ -451,6 +455,8 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         cache.value_options_max_unique = value_options_max_unique
         cache.string_filter_mode = string_filter_mode
         cache._value_options_cache = {}  # reset on new LazyFrame
+        cache._sorted_df = None
+        cache._sorted_cache_key = None
 
         # Schema is cheap -- metadata only, no data scan.
         cache.schema = lf.collect_schema()
@@ -968,6 +974,11 @@ class LazyFrameGridMixin(rx.State, mixin=True):
 
         Builds a lazy query: filter -> count -> sort -> slice, then
         collects only the small page slice.
+
+        When a sort model is active, sorting is done with
+        :func:`sort_dataframe_model` after an unsorted ``collect()``.
+        Polars' own parallel ``sort().collect()`` can silently deadlock
+        the Granian worker used by Reflex fullstack production serves.
         """
         cache_id = self._lf_grid_cache_id
         if not cache_id:
@@ -988,29 +999,71 @@ class LazyFrameGridMixin(rx.State, mixin=True):
                 string_filter_mode=cache.string_filter_mode,
             )
 
-        # Count filtered rows when the stream is reset.
-        # This is a lightweight query -- Polars pushes ``select(len())``
-        # into the scan for formats that support it (Parquet, IPC).
-        # For VCF/CSV it does require a scan, but only counts rows
-        # (no data materialisation).
-        if refresh_row_count:
-            t_count = time.perf_counter()
-            self.lf_grid_row_count = lf.select(pl.len()).collect().item()  # type: ignore[assignment]
-            cache.total_rows = self.lf_grid_row_count
-            print(
-                f"[LazyFrameGrid] row count: {self.lf_grid_row_count:,} "
-                f"({(time.perf_counter() - t_count) * 1000:.1f}ms)"
-            )
-
-        # Apply sort.
-        if self._lf_grid_sort:
-            lf = apply_sort_model(lf, self._lf_grid_sort, cache.schema)
-
-        # Slice to current page -- only this slice is collected.
         page = self.lf_grid_pagination_model.get("page", 0)
         page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
         offset = page * page_size
-        page_df: pl.DataFrame = lf.slice(offset, page_size).collect()
+
+        if self._lf_grid_sort:
+            # Granian-safe path: unsorted collect + Python index sort.
+            # Cache the sorted frame so scroll chunks do not re-sort.
+            # Run off the Granian worker thread — Polars Rayon can deadlock
+            # that thread even for seemingly-simple materializations.
+            sorted_key = (
+                json.dumps(self._lf_grid_filter or {}, sort_keys=True, default=str),
+                json.dumps(self._lf_grid_sort or [], sort_keys=True, default=str),
+            )
+            if cache._sorted_df is None or cache._sorted_cache_key != sorted_key:
+                t_sort = time.perf_counter()
+                sort_model = list(self._lf_grid_sort or [])
+                schema = cache.schema
+
+                def _materialize() -> pl.DataFrame:
+                    collected = lf.collect()
+                    return sort_dataframe_model(collected, sort_model, schema)
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(_materialize)
+                    try:
+                        cache._sorted_df = future.result(timeout=60)
+                    except concurrent.futures.TimeoutError as exc:
+                        future.cancel()
+                        raise TimeoutError(
+                            "LazyFrameGrid sort materialize timed out after 60s "
+                            "(possible Polars/Granian deadlock)"
+                        ) from exc
+                cache._sorted_cache_key = sorted_key
+                print(
+                    f"[LazyFrameGrid] safe sort materialize: "
+                    f"{cache._sorted_df.height:,} rows "
+                    f"({(time.perf_counter() - t_sort) * 1000:.1f}ms)",
+                    flush=True,
+                )
+            sorted_df = cache._sorted_df
+            assert sorted_df is not None
+            if refresh_row_count:
+                self.lf_grid_row_count = sorted_df.height  # type: ignore[assignment]
+                cache.total_rows = self.lf_grid_row_count
+                print(
+                    f"[LazyFrameGrid] row count: {self.lf_grid_row_count:,} "
+                    f"(from sorted cache)"
+                )
+            page_df = sorted_df.slice(offset, page_size)
+        else:
+            cache._sorted_df = None
+            cache._sorted_cache_key = None
+            # Count filtered rows when the stream is reset.
+            # This is a lightweight query -- Polars pushes ``select(len())``
+            # into the scan for formats that support it (Parquet, IPC).
+            if refresh_row_count:
+                t_count = time.perf_counter()
+                self.lf_grid_row_count = lf.select(pl.len()).collect().item()  # type: ignore[assignment]
+                cache.total_rows = self.lf_grid_row_count
+                print(
+                    f"[LazyFrameGrid] row count: {self.lf_grid_row_count:,} "
+                    f"({(time.perf_counter() - t_count) * 1000:.1f}ms)"
+                )
+            # Slice to current page -- only this slice is collected.
+            page_df = lf.slice(offset, page_size).collect()
 
         # Add stable row IDs (global index within the filtered+sorted result).
         page_df = page_df.with_row_index("__row_id__", offset=offset)
