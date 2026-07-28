@@ -10,7 +10,9 @@ Six tabs:
      auto-extracted column descriptions.
   5. Longevity Map (Parquet) -- **server-side** lazy grid loaded from
      HuggingFace via ``hf://``.  Uses ``LazyFrameGridMixin`` for
-     server-side filtering, sorting, and scroll-loading.
+     server-side filtering, sorting, and scroll-loading, with
+     ``eager_value_options_row_limit=0`` so it exercises the deferred
+     free-text filter path that large datasets take.
   6. Full Genome (Server-Side) -- ~4.5 M row whole-genome VCF with
      server-side scroll-loading via a second ``LazyFrameGridMixin``.
 
@@ -696,6 +698,13 @@ class ParquetState(LazyFrameGridMixin, AppState):
     Each ``LazyFrameGridMixin`` substate gets its own independent set
     of ``lf_grid_*`` state vars and its own LazyFrame cache (keyed by
     class name).
+
+    ``eager_value_options_row_limit=0`` opts this grid into the
+    **deferred** value-options path that large datasets always take, so
+    every string column stays free-text (``contains``) and the filter
+    icon only warms the distinct-value cache.  This mirrors how a
+    production app configures its grids and exercises the path that a
+    small demo dataset would otherwise skip via eager promotion.
     """
 
     pq_loaded: bool = False
@@ -709,6 +718,7 @@ class ParquetState(LazyFrameGridMixin, AppState):
         lf = pl.scan_parquet(PARQUET_HF_URL)
         yield from self.set_lazyframe(
             lf,
+            eager_value_options_row_limit=0,
             column_overrides={
                 "rsid": {
                     "width": 140,
@@ -1054,7 +1064,12 @@ def parquet_tab() -> rx.Component:
             rx.text("Server-side", weight="bold", as_="span"),
             " filtering, sorting, and scroll-loading via ",
             rx.code("LazyFrameGridMixin"),
-            ". Multi-column filters accumulate on the backend.",
+            ". Multi-column filters accumulate on the backend. This grid sets ",
+            rx.code("eager_value_options_row_limit=0"),
+            " so it takes the deferred value-options path large datasets use: "
+            "text columns stay free-text, so ",
+            rx.code("contains"),
+            " keeps its input box when you open the filter panel.",
             margin_bottom="1em",
             color="var(--gray-11)",
         ),

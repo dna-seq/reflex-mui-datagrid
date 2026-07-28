@@ -32,9 +32,12 @@ Typical usage::
 
 import concurrent.futures
 import json
+import os
 import time
+import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, TypeVar
 
 import polars as pl
 import reflex as rx
@@ -45,9 +48,80 @@ from reflex_mui_datagrid.polars_utils import (
     _dataframe_to_dicts,
     _resolve_field_name,
     apply_filter_model,
+    apply_sort_model,
     build_column_defs_from_schema,
-    sort_dataframe_model,
 )
+
+_T = TypeVar("_T")
+
+
+def _grid_query_timeout_sec() -> float | None:
+    """Optional query timeout for off-thread Polars work.
+
+    Unset / empty / ``0`` → no timeout (correct for huge LazyFrames).
+    Override with ``REFLEX_MUIGRID_QUERY_TIMEOUT`` (seconds) only when the
+    host app wants a hard ceiling.
+    """
+    raw = os.environ.get("REFLEX_MUIGRID_QUERY_TIMEOUT", "").strip()
+    if not raw:
+        return None
+    value = float(raw)
+    return None if value <= 0 else value
+
+
+class LazyFrameGridError(RuntimeError):
+    """Recoverable LazyFrame grid query failure.
+
+    Handlers catch this (and other exceptions) so a bad filter/sort on one
+    grid cannot leave ``lf_grid_loading`` stuck or kill the ASGI worker.
+    """
+
+
+_grid_query_pool: concurrent.futures.ThreadPoolExecutor | None = None
+
+
+def _get_grid_query_pool() -> concurrent.futures.ThreadPoolExecutor:
+    """Return the shared, never-shut-down query executor.
+
+    It must **not** be a ``with``-scoped pool: ``ThreadPoolExecutor.__exit__``
+    calls ``shutdown(wait=True)``, which blocks until the running Polars
+    collect finishes — so a timeout would wait out the very query it was
+    meant to abandon.
+    """
+    global _grid_query_pool
+    if _grid_query_pool is None:
+        _grid_query_pool = concurrent.futures.ThreadPoolExecutor(
+            thread_name_prefix="muigrid-query",
+        )
+    return _grid_query_pool
+
+
+def _run_grid_query(
+    fn: Callable[[], _T],
+    *,
+    label: str,
+    timeout: float | None = None,
+) -> _T:
+    """Run a Polars materialize off the ASGI worker thread.
+
+    Isolation only — Polars inside the worker still uses its normal Rayon
+    pool.  Do not cap ``POLARS_MAX_THREADS`` and do not replace lazy
+    ``sort().slice().collect()`` with full-frame Python sorts.
+
+    Optional timeout via *timeout* or ``REFLEX_MUIGRID_QUERY_TIMEOUT``.  A
+    timed-out query keeps running on its worker thread (Polars collects are
+    not interruptible); the handler returns so the grid can report the error
+    instead of hanging the event loop.
+    """
+    effective = _grid_query_timeout_sec() if timeout is None else timeout
+    future = _get_grid_query_pool().submit(fn)
+    if effective is None:
+        return future.result()
+    try:
+        return future.result(timeout=effective)
+    except concurrent.futures.TimeoutError as exc:
+        future.cancel()
+        raise LazyFrameGridError(f"{label} timed out after {effective:g}s") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +131,13 @@ from reflex_mui_datagrid.polars_utils import (
 _DEFAULT_CHUNK_SIZE: int = 200
 _DEFAULT_VALUE_OPTIONS_MAX_UNIQUE: int = 500
 _DEFAULT_EAGER_VALUE_OPTIONS_ROW_LIMIT: int = 50_000
+
+# Free-text operators must keep string columns as free-text filters.
+# Promoting them to ``singleSelect`` mid-typing (e.g. Name contains "Bio")
+# flips MUI to an exact ``is`` dropdown and breaks partial-name search.
+_FREE_TEXT_FILTER_OPERATORS: frozenset[str] = frozenset(
+    {"contains", "equals", "startsWith", "endsWith"}
+)
 
 
 class _LazyFrameCache:
@@ -78,9 +159,6 @@ class _LazyFrameCache:
         # Lazily computed per-column value options.
         # None means "not yet computed"; empty list means "computed, too many".
         self._value_options_cache: dict[str, list[str] | None] = {}
-        # Granian-safe sorted materialization cache (filter+sort key → DataFrame).
-        self._sorted_df: pl.DataFrame | None = None
-        self._sorted_cache_key: tuple[Any, ...] | None = None
 
 
 _cache_registry: dict[str, _LazyFrameCache] = {}
@@ -254,9 +332,30 @@ def _infer_value_options_for_column(
     string columns upfront.
     """
     cap = max_unique + 1
-    result = lf.select(
-        pl.col(col_name).cast(pl.String).drop_nulls().unique().head(cap)
-    ).collect()
+
+    def _materialize() -> pl.DataFrame:
+        return lf.select(
+            pl.col(col_name).cast(pl.String).drop_nulls().unique().head(cap)
+        ).collect()
+
+    # Off the ASGI worker thread; degrade to None on timeout/error so a
+    # single filter-icon click cannot wedge the app.
+    try:
+        result = _run_grid_query(
+            _materialize,
+            label=f"value-options materialize for {col_name!r}",
+        )
+    except LazyFrameGridError as exc:
+        print(f"[LazyFrameGrid] {exc}", flush=True)
+        return None
+    except Exception as exc:  # noqa: BLE001 — value options are best-effort
+        print(
+            f"[LazyFrameGrid] value-options for {col_name!r} failed: {exc}",
+            flush=True,
+        )
+        traceback.print_exc()
+        return None
+
     values = result[col_name].drop_nulls().to_list()
     if 0 < len(values) <= max_unique:
         return sorted(str(v) for v in values)
@@ -455,8 +554,6 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         cache.value_options_max_unique = value_options_max_unique
         cache.string_filter_mode = string_filter_mode
         cache._value_options_cache = {}  # reset on new LazyFrame
-        cache._sorted_df = None
-        cache._sorted_cache_key = None
 
         # Schema is cheap -- metadata only, no data scan.
         cache.schema = lf.collect_schema()
@@ -517,6 +614,22 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         """Toggle the debug panel expanded/collapsed state."""
         self.lf_grid_debug_expanded = not self.lf_grid_debug_expanded  # type: ignore[assignment]
 
+    def _lf_grid_handle_failure(self, operation: str, exc: BaseException) -> None:
+        """Surface a grid query failure without crashing the ASGI worker.
+
+        Keeps existing rows visible, clears the spinner, and writes a short
+        message into ``lf_grid_stats`` so the visitor can retry or clear
+        filters.  One knowledgebase grid failing must not take down others.
+        """
+        msg = f"{operation} failed: {exc}"
+        print(f"[LazyFrameGrid] {msg}", flush=True)
+        traceback.print_exc()
+        self.lf_grid_stats = msg  # type: ignore[assignment]
+        self.lf_grid_selected_info = (  # type: ignore[assignment]
+            f"Grid {operation} error — try clearing filters/sort, or reload. "
+            f"({type(exc).__name__}: {exc})"
+        )
+
     def handle_lf_grid_filter(self, filter_model: dict[str, Any]):
         """Handle server-side filter change with multi-column accumulation.
 
@@ -541,51 +654,61 @@ class LazyFrameGridMixin(rx.State, mixin=True):
 
         This is a generator so the loading/stats state is pushed to the
         frontend *before* the potentially expensive Polars query runs.
+        Failures are caught and shown in the grid UI — they must not
+        leave ``lf_grid_loading`` stuck or crash the app.
         """
         self.lf_grid_loading = True  # type: ignore[assignment]
         self.lf_grid_stats = "Filtering..."  # type: ignore[assignment]
         yield
 
-        raw_items = filter_model.get("items", [])
-        had_incoming_items = isinstance(raw_items, list) and bool(raw_items)
-        cache_id = self._lf_grid_cache_id
-        cache = _get_cache(cache_id) if cache_id else None
-        if cache is not None:
-            filter_model = _filter_model_for_filterable_columns(filter_model, cache)
+        try:
+            raw_items = filter_model.get("items", [])
+            had_incoming_items = isinstance(raw_items, list) and bool(raw_items)
+            cache_id = self._lf_grid_cache_id
+            cache = _get_cache(cache_id) if cache_id else None
+            if cache is not None:
+                filter_model = _filter_model_for_filterable_columns(filter_model, cache)
 
-        # Keep the MUI frontend filter model in sync (controlled component).
-        self.lf_grid_filter_model = filter_model  # type: ignore[assignment]
-        if had_incoming_items and not filter_model.get("items"):
+            # Keep the MUI frontend filter model in sync (controlled component).
+            self.lf_grid_filter_model = filter_model  # type: ignore[assignment]
+            if had_incoming_items and not filter_model.get("items"):
+                return
+
+            # Lazily compute value options for any newly-filtered columns.
+            self._ensure_value_options_for_filter(filter_model)
+
+            merged = self._merge_filter_model(filter_model)
+            self._lf_grid_filter = merged  # type: ignore[assignment]
+            page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
+            self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
+            self._refresh_lf_grid_page(append=False, refresh_row_count=True)
+            self._update_filter_debug()
+        except Exception as exc:  # noqa: BLE001 — isolate grid failures from the app
+            self._lf_grid_handle_failure("filter", exc)
+        finally:
             self.lf_grid_loading = False  # type: ignore[assignment]
-            return
-
-        # Lazily compute value options for any newly-filtered columns.
-        self._ensure_value_options_for_filter(filter_model)
-
-        merged = self._merge_filter_model(filter_model)
-        self._lf_grid_filter = merged  # type: ignore[assignment]
-        page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
-        self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
-        self._refresh_lf_grid_page(append=False, refresh_row_count=True)
-        self._update_filter_debug()
-        self.lf_grid_loading = False  # type: ignore[assignment]
 
     def handle_lf_grid_sort(self, sort_model: list[dict[str, Any]]):
         """Handle server-side sort change -- reset scroll stream to top.
 
         This is a generator so the loading/stats state is pushed to the
         frontend *before* the potentially expensive Polars query runs.
+        Failures are caught and shown in the grid UI.
         """
         self.lf_grid_loading = True  # type: ignore[assignment]
         self.lf_grid_stats = "Sorting..."  # type: ignore[assignment]
         yield
 
-        self._lf_grid_sort = sort_model  # type: ignore[assignment]
-        page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
-        self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
-        self._refresh_lf_grid_page(append=False, refresh_row_count=True)
-        self._update_filter_debug()
-        self.lf_grid_loading = False  # type: ignore[assignment]
+        try:
+            self._lf_grid_sort = sort_model  # type: ignore[assignment]
+            page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
+            self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
+            self._refresh_lf_grid_page(append=False, refresh_row_count=True)
+            self._update_filter_debug()
+        except Exception as exc:  # noqa: BLE001 — isolate grid failures from the app
+            self._lf_grid_handle_failure("sort", exc)
+        finally:
+            self.lf_grid_loading = False  # type: ignore[assignment]
 
     def handle_lf_grid_scroll_end(self, _params: dict[str, Any]):
         """Load the next chunk when the virtual scroller nears the bottom.
@@ -606,27 +729,42 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         self.lf_grid_stats = f"Loading rows {next_offset:,}..."  # type: ignore[assignment]
         yield
 
-        t0 = time.perf_counter()
-        self.lf_grid_pagination_model = {"page": page + 1, "pageSize": page_size}  # type: ignore[assignment]
-        self._refresh_lf_grid_page(append=True, refresh_row_count=False)
-        elapsed_ms = (time.perf_counter() - t0) * 1000
-        total_rows = len(self.lf_grid_rows)
-        self.lf_grid_loading = False  # type: ignore[assignment]
-        print(
-            f"[LazyFrameGrid] scroll-end chunk: "
-            f"page={page + 1}, offset={next_offset}, "
-            f"+{page_size} rows, total={total_rows}, "
-            f"elapsed={elapsed_ms:.1f}ms"
-        )
+        try:
+            t0 = time.perf_counter()
+            self.lf_grid_pagination_model = {"page": page + 1, "pageSize": page_size}  # type: ignore[assignment]
+            self._refresh_lf_grid_page(append=True, refresh_row_count=False)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            total_rows = len(self.lf_grid_rows)
+            print(
+                f"[LazyFrameGrid] scroll-end chunk: "
+                f"page={page + 1}, offset={next_offset}, "
+                f"+{page_size} rows, total={total_rows}, "
+                f"elapsed={elapsed_ms:.1f}ms"
+            )
+        except Exception as exc:  # noqa: BLE001 — isolate grid failures from the app
+            # Roll page back so a retry can load the same chunk.
+            self.lf_grid_pagination_model = {"page": page, "pageSize": page_size}  # type: ignore[assignment]
+            self._lf_grid_handle_failure("scroll", exc)
+        finally:
+            self.lf_grid_loading = False  # type: ignore[assignment]
 
     def handle_lf_grid_request_value_options(self, field: str) -> None:
-        """Compute value options for a single column on demand.
+        """Warm the value-options cache when the filter icon is clicked.
 
-        Dispatched from the frontend when the user clicks the filter
-        icon on a column header.  If the column qualifies for a
-        ``singleSelect`` dropdown (low-cardinality string/categorical),
-        its column definition is upgraded in-place and pushed back to
-        the frontend so MUI renders the "is" dropdown immediately.
+        Dispatched from the frontend before ``showFilterPanel``.  This
+        only precomputes distinct values — it must **not** upgrade the
+        column to ``singleSelect``.
+
+        Upgrading here races the open filter form: MUI opens with string
+        operators (``contains`` + text input), then a mid-flight type
+        change to ``singleSelect`` drops ``contains`` from the operator
+        list and leaves an empty value editor (no InputComponent).  That
+        is what broke Organization Name ``contains "Adair"``.
+
+        Column type upgrades stay in:
+        * ``_compute_all_value_options`` (eager init for small grids)
+        * ``_ensure_value_options_for_filter`` (on Apply for ``is`` /
+          ``not`` / ``isAnyOf`` only — never for free-text ops)
         """
         cache_id = self._lf_grid_cache_id
         if not cache_id:
@@ -642,17 +780,14 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         if not resolved or resolved in cache._value_options_cache:
             return  # already computed or invalid
 
-        options = _get_or_compute_value_options(cache, resolved)
-        if options is not None:
-            for i, col_def in enumerate(cache.col_defs):
-                if col_def.get("field") == resolved:
-                    cache.col_defs[i] = {
-                        **col_def,
-                        "type": "singleSelect",
-                        "valueOptions": options,
-                    }
-                    self.lf_grid_columns = cache.col_defs  # type: ignore[assignment]
-                    break
+        try:
+            _get_or_compute_value_options(cache, resolved)
+        except Exception as exc:  # noqa: BLE001 — icon click must never crash the app
+            print(
+                f"[LazyFrameGrid] value-options warm for {resolved!r} failed: {exc}",
+                flush=True,
+            )
+            traceback.print_exc()
 
     def handle_lf_grid_row_click(self, params: dict[str, Any]) -> None:
         """Handle row click -- show all fields with descriptions."""
@@ -695,13 +830,17 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         self.lf_grid_stats = "Clearing filters..."  # type: ignore[assignment]
         yield
 
-        self._lf_grid_filter = {}  # type: ignore[assignment]
-        self.lf_grid_filter_model = {"items": []}  # type: ignore[assignment]
-        page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
-        self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
-        self._refresh_lf_grid_page(append=False, refresh_row_count=True)
-        self._update_filter_debug()
-        self.lf_grid_loading = False  # type: ignore[assignment]
+        try:
+            self._lf_grid_filter = {}  # type: ignore[assignment]
+            self.lf_grid_filter_model = {"items": []}  # type: ignore[assignment]
+            page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
+            self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
+            self._refresh_lf_grid_page(append=False, refresh_row_count=True)
+            self._update_filter_debug()
+        except Exception as exc:  # noqa: BLE001 — isolate grid failures from the app
+            self._lf_grid_handle_failure("clear filters", exc)
+        finally:
+            self.lf_grid_loading = False  # type: ignore[assignment]
 
     def download_lf_grid_preset(self) -> rx.event.EventSpec:
         """Download the current filter/sort state as a JSON preset file.
@@ -747,47 +886,51 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         self.lf_grid_stats = "Applying preset..."  # type: ignore[assignment]
         yield
 
-        upload_file = files[0]
-        content = await upload_file.read()
-        text = content.decode("utf-8") if isinstance(content, bytes) else content
-        preset = json.loads(text)
+        try:
+            upload_file = files[0]
+            content = await upload_file.read()
+            text = content.decode("utf-8") if isinstance(content, bytes) else content
+            preset = json.loads(text)
 
-        filter_model: dict[str, Any] = preset.get("filter_model", {})
-        sort_model: list[dict[str, Any]] = preset.get("sort_model", [])
+            filter_model: dict[str, Any] = preset.get("filter_model", {})
+            sort_model: list[dict[str, Any]] = preset.get("sort_model", [])
 
-        cache_id = self._lf_grid_cache_id
-        cache = _get_cache(cache_id) if cache_id else None
-        if cache is not None:
-            filter_model = _filter_model_for_filterable_columns(filter_model, cache)
+            cache_id = self._lf_grid_cache_id
+            cache = _get_cache(cache_id) if cache_id else None
+            if cache is not None:
+                filter_model = _filter_model_for_filterable_columns(filter_model, cache)
 
-        self._lf_grid_filter = filter_model  # type: ignore[assignment]
-        self._lf_grid_sort = sort_model  # type: ignore[assignment]
+            self._lf_grid_filter = filter_model  # type: ignore[assignment]
+            self._lf_grid_sort = sort_model  # type: ignore[assignment]
 
-        # Update the MUI frontend filter model so the grid UI reflects
-        # the uploaded preset.  MUI Community only shows one filter at
-        # a time, so we show the last item (if any).
-        items = filter_model.get("items", [])
-        if items:
-            last_item = items[-1]
-            self.lf_grid_filter_model = {  # type: ignore[assignment]
-                "items": [last_item],
-                "logicOperator": filter_model.get("logicOperator", "and"),
-            }
-        else:
-            self.lf_grid_filter_model = {"items": []}  # type: ignore[assignment]
+            # Update the MUI frontend filter model so the grid UI reflects
+            # the uploaded preset.  MUI Community only shows one filter at
+            # a time, so we show the last item (if any).
+            items = filter_model.get("items", [])
+            if items:
+                last_item = items[-1]
+                self.lf_grid_filter_model = {  # type: ignore[assignment]
+                    "items": [last_item],
+                    "logicOperator": filter_model.get("logicOperator", "and"),
+                }
+            else:
+                self.lf_grid_filter_model = {"items": []}  # type: ignore[assignment]
 
-        page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
-        self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
-        self._refresh_lf_grid_page(append=False, refresh_row_count=True)
-        self._update_filter_debug()
-        self.lf_grid_loading = False  # type: ignore[assignment]
+            page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
+            self.lf_grid_pagination_model = {"page": 0, "pageSize": page_size}  # type: ignore[assignment]
+            self._refresh_lf_grid_page(append=False, refresh_row_count=True)
+            self._update_filter_debug()
 
-        n_filters = len(items)
-        n_sorts = len(sort_model)
-        self.lf_grid_selected_info = (  # type: ignore[assignment]
-            f"Preset applied: {n_filters} filter(s), {n_sorts} sort(s). "
-            f"{self.lf_grid_row_count:,} rows match."
-        )
+            n_filters = len(items)
+            n_sorts = len(sort_model)
+            self.lf_grid_selected_info = (  # type: ignore[assignment]
+                f"Preset applied: {n_filters} filter(s), {n_sorts} sort(s). "
+                f"{self.lf_grid_row_count:,} rows match."
+            )
+        except Exception as exc:  # noqa: BLE001 — isolate grid failures from the app
+            self._lf_grid_handle_failure("preset", exc)
+        finally:
+            self.lf_grid_loading = False  # type: ignore[assignment]
 
     def _merge_filter_model(
         self,
@@ -869,6 +1012,11 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         column (single-column scan with projection pushdown) and updates
         the column definitions sent to the frontend.
 
+        Free-text operators (``contains``, ``equals``, ``startsWith``,
+        ``endsWith``) intentionally skip promotion to ``singleSelect`` —
+        otherwise typing a partial Name match flips the column to an exact
+        ``is`` dropdown and breaks the filter.
+
         This keeps init instant -- value options are only computed on
         demand.
         """
@@ -887,6 +1035,9 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             raw_field = item.get("field")
             if not raw_field:
                 continue
+            operator = str(item.get("operator") or "")
+            if operator in _FREE_TEXT_FILTER_OPERATORS:
+                continue
             # Resolve case-insensitively against the schema.
             field = (
                 _resolve_field_name(raw_field, cache.schema)
@@ -896,7 +1047,16 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             if not field or field in cache._value_options_cache:
                 continue  # already computed or not a valid field
 
-            options = _get_or_compute_value_options(cache, field)
+            try:
+                options = _get_or_compute_value_options(cache, field)
+            except Exception as exc:  # noqa: BLE001 — dropdown upgrade is best-effort
+                print(
+                    f"[LazyFrameGrid] value-options for filter field "
+                    f"{field!r} failed: {exc}",
+                    flush=True,
+                )
+                traceback.print_exc()
+                continue
             if options is not None:
                 # Update the column def to singleSelect with these options.
                 for i, col_def in enumerate(cache.col_defs):
@@ -972,13 +1132,11 @@ class LazyFrameGridMixin(rx.State, mixin=True):
     ) -> None:
         """Collect only the current page from the cached LazyFrame.
 
-        Builds a lazy query: filter -> count -> sort -> slice, then
-        collects only the small page slice.
-
-        When a sort model is active, sorting is done with
-        :func:`sort_dataframe_model` after an unsorted ``collect()``.
-        Polars' own parallel ``sort().collect()`` can silently deadlock
-        the Granian worker used by Reflex fullstack production serves.
+        Builds a lazy query: filter → sort → count/slice, then collects
+        **only the page slice**.  Polars keeps its normal Rayon pool —
+        work is merely moved off the ASGI request thread so Granian cannot
+        deadlock.  Never materialise the full filtered frame into Python
+        for sorting (that OOM/slow-path kills huge LazyFrame hosts).
         """
         cache_id = self._lf_grid_cache_id
         if not cache_id:
@@ -990,7 +1148,6 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         t0 = time.perf_counter()
         lf: pl.LazyFrame = cache.lf
 
-        # Apply filter.
         if self._lf_grid_filter and self._lf_grid_filter.get("items"):
             lf = apply_filter_model(
                 lf,
@@ -999,71 +1156,31 @@ class LazyFrameGridMixin(rx.State, mixin=True):
                 string_filter_mode=cache.string_filter_mode,
             )
 
+        if self._lf_grid_sort:
+            lf = apply_sort_model(lf, list(self._lf_grid_sort), cache.schema)
+
         page = self.lf_grid_pagination_model.get("page", 0)
         page_size = self.lf_grid_pagination_model.get("pageSize", _DEFAULT_CHUNK_SIZE)
         offset = page * page_size
+        need_count = refresh_row_count
 
-        if self._lf_grid_sort:
-            # Granian-safe path: unsorted collect + Python index sort.
-            # Cache the sorted frame so scroll chunks do not re-sort.
-            # Run off the Granian worker thread — Polars Rayon can deadlock
-            # that thread even for seemingly-simple materializations.
-            sorted_key = (
-                json.dumps(self._lf_grid_filter or {}, sort_keys=True, default=str),
-                json.dumps(self._lf_grid_sort or [], sort_keys=True, default=str),
+        def _materialize_page() -> tuple[int | None, pl.DataFrame]:
+            count: int | None = None
+            if need_count:
+                count = int(lf.select(pl.len()).collect().item())
+            return count, lf.slice(offset, page_size).collect()
+
+        row_count, page_df = _run_grid_query(
+            _materialize_page,
+            label="LazyFrameGrid page materialize",
+        )
+        if row_count is not None:
+            self.lf_grid_row_count = row_count  # type: ignore[assignment]
+            cache.total_rows = self.lf_grid_row_count
+            print(
+                f"[LazyFrameGrid] row count: {self.lf_grid_row_count:,} "
+                f"({(time.perf_counter() - t0) * 1000:.1f}ms)"
             )
-            if cache._sorted_df is None or cache._sorted_cache_key != sorted_key:
-                t_sort = time.perf_counter()
-                sort_model = list(self._lf_grid_sort or [])
-                schema = cache.schema
-
-                def _materialize() -> pl.DataFrame:
-                    collected = lf.collect()
-                    return sort_dataframe_model(collected, sort_model, schema)
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(_materialize)
-                    try:
-                        cache._sorted_df = future.result(timeout=60)
-                    except concurrent.futures.TimeoutError as exc:
-                        future.cancel()
-                        raise TimeoutError(
-                            "LazyFrameGrid sort materialize timed out after 60s "
-                            "(possible Polars/Granian deadlock)"
-                        ) from exc
-                cache._sorted_cache_key = sorted_key
-                print(
-                    f"[LazyFrameGrid] safe sort materialize: "
-                    f"{cache._sorted_df.height:,} rows "
-                    f"({(time.perf_counter() - t_sort) * 1000:.1f}ms)",
-                    flush=True,
-                )
-            sorted_df = cache._sorted_df
-            assert sorted_df is not None
-            if refresh_row_count:
-                self.lf_grid_row_count = sorted_df.height  # type: ignore[assignment]
-                cache.total_rows = self.lf_grid_row_count
-                print(
-                    f"[LazyFrameGrid] row count: {self.lf_grid_row_count:,} "
-                    f"(from sorted cache)"
-                )
-            page_df = sorted_df.slice(offset, page_size)
-        else:
-            cache._sorted_df = None
-            cache._sorted_cache_key = None
-            # Count filtered rows when the stream is reset.
-            # This is a lightweight query -- Polars pushes ``select(len())``
-            # into the scan for formats that support it (Parquet, IPC).
-            if refresh_row_count:
-                t_count = time.perf_counter()
-                self.lf_grid_row_count = lf.select(pl.len()).collect().item()  # type: ignore[assignment]
-                cache.total_rows = self.lf_grid_row_count
-                print(
-                    f"[LazyFrameGrid] row count: {self.lf_grid_row_count:,} "
-                    f"({(time.perf_counter() - t_count) * 1000:.1f}ms)"
-                )
-            # Slice to current page -- only this slice is collected.
-            page_df = lf.slice(offset, page_size).collect()
 
         # Add stable row IDs (global index within the filtered+sorted result).
         page_df = page_df.with_row_index("__row_id__", offset=offset)

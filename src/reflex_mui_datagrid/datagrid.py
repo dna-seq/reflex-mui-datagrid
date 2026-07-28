@@ -341,9 +341,9 @@ const _AlwaysVisibleFilterIconButton = (props) => {
   const handleClick = React.useCallback((event) => {
     event.preventDefault();
     event.stopPropagation();
-    // Request value options from the server before opening the panel.
-    // The UnlimitedDataGrid wrapper listens for this event and calls
-    // the Python handler, which may upgrade the column to singleSelect.
+    // Warm the server-side value-options cache before opening the panel.
+    // The Python handler must NOT upgrade the column to singleSelect here —
+    // that races the filter form (contains + text input → empty value editor).
     const el = apiRef.current.rootElementRef?.current;
     if (el) {
       el.dispatchEvent(new CustomEvent("_requestValueOptions", {

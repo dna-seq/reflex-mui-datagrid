@@ -364,6 +364,14 @@ def _build_filter_expr(
     # Remaining operators require a value.
     if value is None:
         return None
+    # Blank free-text values are "filter panel open" noise, not a real query.
+    if (
+        isinstance(value, str)
+        and not value.strip()
+        and operator
+        in {"contains", "equals", "startsWith", "endsWith", "is", "not"}
+    ):
+        return None
 
     # -- boolean operators --
     # MUI DataGrid sends boolean filters with operator "is" and value
@@ -389,6 +397,8 @@ def _build_filter_expr(
         return compare_col != compare_value
     if operator == "isAnyOf":
         if not isinstance(value, list):
+            return None
+        if not value:
             return None
         compare_values = (
             [str(v).lower() for v in value]
@@ -584,15 +594,14 @@ def sort_dataframe_model(
     sort_model: list[dict[str, str]],
     schema: pl.Schema | None = None,
 ) -> pl.DataFrame:
-    """Sort a DataFrame from a MUI sort model without Polars' parallel sort.
+    """Sort an already-collected DataFrame via Python ``list.sort``.
 
-    Polars ``DataFrame.sort`` / ``LazyFrame.sort().collect()`` can silently
-    deadlock the Granian worker thread used by Reflex fullstack production
-    (``reflex run --env prod`` / ``uv run serve``). Unsorted ``collect()`` and
-    plain Python sorting remain safe on that thread.
+    Kept for small eager frames / tests.  **Do not** use this as the
+    LazyFrame grid refresh path — collecting a huge filtered frame into
+    Python and sorting it destroys performance for heavy hosts.
 
-    This helper sorts via Python ``list.sort`` over row indices, then gathers
-    with Polars take/gather — no Rayon sort kernel is invoked.
+    Grid sorting must stay lazy: ``apply_sort_model(lf).slice().collect()``
+    off the ASGI thread (full Polars Rayon).
     """
     if not sort_model or df.height == 0:
         return df
@@ -632,14 +641,13 @@ def apply_sort_model(
     """Apply a MUI DataGrid sort model to a Polars LazyFrame.
 
     Translates the MUI ``sortModel`` array into a ``lf.sort()`` call and
-    returns the sorted LazyFrame — **no collect**.
+    returns the sorted LazyFrame — **no collect**.  Prefer chaining
+    ``.slice(...).collect()`` so only a page is materialised.
 
-    .. warning::
-
-        Do **not** call ``.collect()`` on the result from a Reflex / Granian
-        fullstack worker thread — Polars' parallel sort can deadlock there.
-        Prefer :func:`sort_dataframe_model` after an unsorted ``collect()``
-        (see ``LazyFrameGridMixin._refresh_lf_grid_page``).
+    Collect the result **off** the Reflex/Granian ASGI request thread
+    (see ``LazyFrameGridMixin._refresh_lf_grid_page`` / ``_run_grid_query``).
+    Polars keeps its normal Rayon pool; do not cap ``POLARS_MAX_THREADS``
+    and do not replace this with a full-frame Python sort.
 
     Field names are resolved case-insensitively against the schema to
     handle any case mismatches from the frontend serialisation layer.

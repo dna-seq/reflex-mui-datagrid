@@ -17,6 +17,7 @@ from reflex_mui_datagrid.datagrid import (
     data_grid,
 )
 from reflex_mui_datagrid.lazyframe_grid import (
+    LazyFrameGridError,
     LazyFrameGridMixin,
     lazyframe_grid,
     lazyframe_grid_detail_box,

@@ -141,6 +141,42 @@ class TestServerSideStringFilters:
         assert starts["trait"].to_list() == ["crystallized intelligence"]
         assert ends["trait"].to_list() == ["Fluid Intelligence", "crystallized intelligence"]
 
+    def test_is_not_and_is_any_of_are_case_insensitive(self) -> None:
+        df = pl.DataFrame({"Name": ["BioViva Sciences", "Minicircle", "Unlimited Bio"]})
+
+        is_match = apply_filter_model(
+            df.lazy(),
+            {"items": [{"field": "Name", "operator": "is", "value": "bioviva sciences"}]},
+        ).collect()
+        not_match = apply_filter_model(
+            df.lazy(),
+            {"items": [{"field": "Name", "operator": "not", "value": "MINICIRCLE"}]},
+        ).collect()
+        any_of = apply_filter_model(
+            df.lazy(),
+            {
+                "items": [
+                    {
+                        "field": "Name",
+                        "operator": "isAnyOf",
+                        "value": ["minicircle", "UNLIMITED BIO"],
+                    }
+                ]
+            },
+        ).collect()
+
+        assert is_match["Name"].to_list() == ["BioViva Sciences"]
+        assert not_match["Name"].to_list() == ["BioViva Sciences", "Unlimited Bio"]
+        assert any_of["Name"].to_list() == ["Minicircle", "Unlimited Bio"]
+
+    def test_blank_free_text_filter_is_ignored(self) -> None:
+        df = pl.DataFrame({"Name": ["BioViva", "Minicircle"]})
+        filtered = apply_filter_model(
+            df.lazy(),
+            {"items": [{"field": "Name", "operator": "contains", "value": "  "}]},
+        ).collect()
+        assert filtered.height == 2
+
     def test_string_filter_can_be_case_sensitive(self) -> None:
         df = pl.DataFrame({"trait": ["Fluid Intelligence", "fluid intelligence"]})
 
