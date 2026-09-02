@@ -195,7 +195,8 @@ class MyState(LazyFrameGridMixin, rx.State):
 | `lf_grid_loading` | `bool` | Loading indicator |
 | `lf_grid_loaded` | `bool` | Whether data has been loaded |
 | `lf_grid_stats` | `str` | Last refresh timing info |
-| `lf_grid_selected_info` | `str` | Detail string for clicked row |
+| `lf_grid_selected_info` | `str` | Status / fallback text for the clicked-row box |
+| `lf_grid_selected_fields` | `list[dict]` | Field/value records for the clicked-row box |
 
 **`set_lazyframe` parameters:**
 

@@ -403,6 +403,42 @@ def _get_or_compute_value_options(
     return options
 
 
+def _format_selected_value(value: Any) -> str:
+    """Render one cell for the row-detail panel without knowing the field."""
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return "—"
+        return ", ".join(_format_selected_value(item) for item in value)
+    if isinstance(value, dict):
+        return json.dumps(value, default=str, ensure_ascii=False)
+    text = str(value).strip()
+    return text if text else "—"
+
+
+def _selected_row_fields(
+    row: dict[str, Any],
+    descriptions: dict[str, str] | None = None,
+) -> list[dict[str, str]]:
+    """Turn a clicked row into generic field/value/description records."""
+    descs = descriptions or {}
+    fields: list[dict[str, str]] = []
+    for field, value in row.items():
+        if field == "__row_id__":
+            continue
+        fields.append(
+            {
+                "field": str(field),
+                "value": _format_selected_value(value),
+                "description": str(descs.get(field, "") or ""),
+            }
+        )
+    return fields
+
+
 # ---------------------------------------------------------------------------
 # LazyFrameGridMixin
 # ---------------------------------------------------------------------------
@@ -460,6 +496,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
     lf_grid_loaded: bool = False
     lf_grid_stats: str = ""
     lf_grid_selected_info: str = "Click a row to see details."
+    lf_grid_selected_fields: list[dict[str, str]] = []
     lf_grid_filter_debug: str = "No active filters or sorts."
     lf_grid_filter_preset_json: str = ""
     lf_grid_debug_expanded: bool = False
@@ -541,7 +578,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
                 expressions.
         """
         self.lf_grid_loading = True  # type: ignore[assignment]
-        self.lf_grid_selected_info = "Preparing LazyFrame..."  # type: ignore[assignment]
+        self._set_lf_grid_status("Preparing LazyFrame...")
         yield  # send loading state to the frontend immediately
 
         # Determine cache ID from the state class name.
@@ -602,9 +639,14 @@ class LazyFrameGridMixin(rx.State, mixin=True):
             self._compute_all_value_options()
 
         self.lf_grid_loading = False  # type: ignore[assignment]
-        self.lf_grid_selected_info = (  # type: ignore[assignment]
+        self._set_lf_grid_status(
             f"Ready: {self.lf_grid_row_count:,} rows. Scroll down to load more."
         )
+
+    def _set_lf_grid_status(self, message: str) -> None:
+        """Show a status line in the detail box and drop any clicked-row fields."""
+        self.lf_grid_selected_info = message  # type: ignore[assignment]
+        self.lf_grid_selected_fields = []  # type: ignore[assignment]
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -625,7 +667,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
         print(f"[LazyFrameGrid] {msg}", flush=True)
         traceback.print_exc()
         self.lf_grid_stats = msg  # type: ignore[assignment]
-        self.lf_grid_selected_info = (  # type: ignore[assignment]
+        self._set_lf_grid_status(
             f"Grid {operation} error — try clearing filters/sort, or reload. "
             f"({type(exc).__name__}: {exc})"
         )
@@ -797,16 +839,17 @@ class LazyFrameGridMixin(rx.State, mixin=True):
 
         cache_id = self._lf_grid_cache_id
         descs = _get_cache(cache_id).descriptions if cache_id else {}
+        fields = _selected_row_fields(row, descs)
+        self.lf_grid_selected_fields = fields  # type: ignore[assignment]
 
         lines: list[str] = []
-        for field, value in row.items():
-            if field == "__row_id__":
-                continue
-            desc = descs.get(field, "")
-            if desc:
-                lines.append(f"{field}: {value}  ({desc})")
+        for item in fields:
+            if item["description"]:
+                lines.append(
+                    f"{item['field']}: {item['value']}  ({item['description']})"
+                )
             else:
-                lines.append(f"{field}: {value}")
+                lines.append(f"{item['field']}: {item['value']}")
         self.lf_grid_selected_info = "\n".join(lines)  # type: ignore[assignment]
 
     def handle_lf_grid_row_selection(self, selection_model: dict[str, Any]) -> None:
@@ -923,7 +966,7 @@ class LazyFrameGridMixin(rx.State, mixin=True):
 
             n_filters = len(items)
             n_sorts = len(sort_model)
-            self.lf_grid_selected_info = (  # type: ignore[assignment]
+            self._set_lf_grid_status(
                 f"Preset applied: {n_filters} filter(s), {n_sorts} sort(s). "
                 f"{self.lf_grid_row_count:,} rows match."
             )
@@ -1692,8 +1735,53 @@ def _format_sort_model_debug(sort_model: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _detail_field_row(item: rx.Var) -> rx.Component:
+    """One generic field/value row. Field names come from the clicked row."""
+    description = item["description"].to(str)
+    return rx.el.div(
+        rx.el.dt(
+            item["field"].to(str),
+            style={
+                "margin": "0",
+                "flex": "0 0 11rem",
+                "fontWeight": "600",
+                "color": "var(--gray-11)",
+                "wordBreak": "break-word",
+            },
+        ),
+        rx.el.dd(
+            rx.text(
+                item["value"].to(str),
+                size="2",
+                style={"wordBreak": "break-word", "whiteSpace": "pre-wrap"},
+            ),
+            rx.cond(
+                description != "",
+                rx.text(
+                    description,
+                    size="1",
+                    color="var(--gray-9)",
+                    style={"wordBreak": "break-word", "marginTop": "0.15rem"},
+                ),
+            ),
+            style={"margin": "0", "flex": "1 1 auto", "minWidth": "0"},
+        ),
+        style={
+            "display": "flex",
+            "alignItems": "flex-start",
+            "gap": "1rem",
+            "padding": "0.4rem 0",
+            "borderBottom": "1px solid var(--gray-a4)",
+        },
+    )
+
+
 def lazyframe_grid_detail_box(state_cls: type) -> rx.Component:
     """Return a detail box showing the selected row's fields.
+
+    A clicked row renders as a generic field/value list built from the
+    row dict. Status messages (ready, errors, presets) still use
+    ``lf_grid_selected_info``.
 
     Args:
         state_cls: The ``rx.State`` subclass that inherits from
@@ -1703,13 +1791,22 @@ def lazyframe_grid_detail_box(state_cls: type) -> rx.Component:
         A Reflex component.
     """
     return rx.box(
-        rx.text(
-            state_cls.lf_grid_selected_info,
-            white_space="pre-wrap",
-            size="2",
+        rx.cond(
+            state_cls.lf_grid_selected_fields.length() > 0,
+            rx.el.dl(
+                rx.foreach(state_cls.lf_grid_selected_fields, _detail_field_row),
+                style={"margin": "0"},
+            ),
+            rx.text(
+                state_cls.lf_grid_selected_info,
+                white_space="pre-wrap",
+                size="2",
+            ),
         ),
         margin_top="1em",
-        padding="1em",
+        padding="0.75em 1em",
         border_radius="8px",
         background="var(--gray-a3)",
+        max_height="22rem",
+        overflow_y="auto",
     )

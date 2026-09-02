@@ -428,7 +428,8 @@ class GridB(LazyFrameGridMixin, rx.State):
 | `lf_grid_loading` | `bool` | `False` | Loading indicator. |
 | `lf_grid_loaded` | `bool` | `False` | Whether data has been loaded. |
 | `lf_grid_stats` | `str` | `""` | Last refresh timing info. |
-| `lf_grid_selected_info` | `str` | `"Click a row to see details."` | Detail string for clicked row. |
+| `lf_grid_selected_info` | `str` | `"Click a row to see details."` | Status / fallback text for the detail box. |
+| `lf_grid_selected_fields` | `list[dict]` | `[]` | Clicked-row field/value/description records for the detail box. |
 | `lf_grid_filter_debug` | `str` | `"No active filters or sorts."` | Compact active filter/sort summary displayed by the optional filter panel. |
 | `lf_grid_filter_preset_json` | `str` | `""` | Current filter/sort preset JSON used for copy/download when filters or sorts are active. |
 | `lf_grid_debug_expanded` | `bool` | `False` | Whether the optional filter panel is expanded to show the JSON preset controls. |
@@ -476,7 +477,7 @@ yield from self.set_lazyframe(lf, column_overrides={
 | `handle_lf_grid_filter(filter_model)` | Filter change | Resets to page 0, re-queries with Polars expressions. |
 | `handle_lf_grid_sort(sort_model)` | Sort change | Resets to page 0, re-queries with Polars expressions. |
 | `handle_lf_grid_scroll_end(params)` | Scroll near bottom | Appends next chunk of rows. |
-| `handle_lf_grid_row_click(params)` | Row click | Populates `lf_grid_selected_info` with field details. |
+| `handle_lf_grid_row_click(params)` | Row click | Populates `lf_grid_selected_fields` from the row dict and keeps `lf_grid_selected_info` as a text fallback. |
 
 ---
 
